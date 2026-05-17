@@ -1,0 +1,17 @@
+# local environment variables containing sensitive Telegram tokens
+.env
+
+# virtual environments
+venv/
+ENV/
+env/
+
+# python bytecode and cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# local debugging outputs
+amazon_debug.html
+*.log

@@ -18,12 +18,14 @@ env_path = BASE_DIR / '.env'
 if env_path.exists():
     load_dotenv(dotenv_path=env_path)
 
-# --- Retrieve Configuration Credentials ---
 # Telegram Bot Token (obtained from @BotFather)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 # Telegram Channel Username or ID (e.g., @mydealalerts or -100123456789)
 CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME", "@YOUR_CHANNEL_USERNAME_HERE")
+
+# Target Real Myntra Product URL to scrape
+MYNTRA_PRODUCT_URL = os.getenv("MYNTRA_PRODUCT_URL", "https://www.myntra.com/1364628")
 
 def is_configured() -> bool:
     """

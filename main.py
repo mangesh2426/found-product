@@ -472,11 +472,19 @@ def format_review_message(product: dict, discount_percent: float) -> str:
     return message
 
 
-async def send_telegram_message(bot_client: telegram.Bot, channel_chat_id: str, message: str, image_url: str, is_dry_run: bool):
+async def send_telegram_message(bot_client: telegram.Bot, channel_chat_id: str, message: str, image_url: str, is_dry_run: bool, product_url: str = None):
     """
     Sends the formatted message to the Telegram channel.
-    Supports photo-embedded card layouts if a product photo is successfully scraped!
+    Supports beautiful photo-caption card posts with inline Buy Now button and robust fallback!
     """
+    # Build inline keyboard markup if a product URL is provided
+    reply_markup = None
+    if product_url and not is_dry_run:
+        keyboard = [
+            [telegram.InlineKeyboardButton("🛒 Buy Now", url=product_url)]
+        ]
+        reply_markup = telegram.InlineKeyboardMarkup(keyboard)
+
     if is_dry_run:
         print("\n📢 [DRY-RUN BROADCAST MESSAGE TO TELEGRAM]")
         print("-" * 50)
@@ -489,21 +497,38 @@ async def send_telegram_message(bot_client: telegram.Bot, channel_chat_id: str, 
         print(clean_msg)
         if image_url:
             print(f"📸 Image attached: {image_url}")
+        if product_url:
+            print(f"🔘 Button attached: [🛒 Buy Now -> {product_url}]")
         print("-" * 50)
     else:
         # Broadcast live message. If image exists, send a beautiful photo-caption card
         if image_url and image_url.startswith("http"):
-            await bot_client.send_photo(
-                chat_id=channel_chat_id,
-                photo=image_url,
-                caption=message,
-                parse_mode="HTML"
-            )
+            try:
+                print(f"📸 [Telegram Photo Upload] Attempting to send product image to channel: {image_url}...")
+                await bot_client.send_photo(
+                    chat_id=channel_chat_id,
+                    photo=image_url,
+                    caption=message,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+                print(f"✅ [Telegram Photo Upload SUCCESS] Product image published successfully to channel {channel_chat_id}!")
+            except Exception as photo_err:
+                print(f"⚠️ [Telegram Photo Upload FAILURE] Image upload failed ({photo_err}). Falling back to text message...")
+                # Fallback to text message
+                await bot_client.send_message(
+                    chat_id=channel_chat_id,
+                    text=message,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
         else:
+            print("ℹ️ [Telegram Dispatch] No image URL provided or invalid format. Sending text-only message...")
             await bot_client.send_message(
                 chat_id=channel_chat_id,
                 text=message,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=reply_markup
             )
 
 
@@ -672,7 +697,8 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                             channel_chat_id=channel_chat_id,
                             message=deal_message,
                             image_url=product["image_url"],
-                            is_dry_run=is_dry_run
+                            is_dry_run=is_dry_run,
+                            product_url=product["url"]
                         )
                         deals_published_count += 1
                         posts_in_this_scan += 1

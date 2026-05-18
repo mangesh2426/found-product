@@ -13,11 +13,12 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME")
 
-# Import the deal message formatter from main.py to keep the codebase clean and modular!
-from main import format_deal_message
+# Import settings and helper modules from main.py and config.py to keep everything clean and modular!
+import config
+from main import format_deal_message, load_posted_deals, save_posted_deal
 
-# List of target search keywords for Indian fashion
-KEYWORDS = ["men t shirt", "hoodie", "sneakers", "kurti", "jacket"]
+# Re-use target search keywords from our central configuration
+KEYWORDS = config.KEYWORDS
 
 def clean_price(price_str: str) -> float:
     """
@@ -167,69 +168,70 @@ def crawl_ajio(keyword: str) -> list:
 
 def crawl_myntra(keyword: str) -> list:
     """
-    Crawls Myntra search gateway. Myntra blocks default scripts with heavy tokens.
-    Provides a beautiful fallback sample system to let beginners test.
+    Crawls Myntra search result pages from the live site using requests + BeautifulSoup.
     """
-    query = keyword.replace(" ", "+")
-    url = f"https://www.myntra.com/gateway/v2/search/{query}?rows=10"
+    import json
+    query_dashed = keyword.strip().lower().replace(" ", "-")
+    url = f"https://www.myntra.com/{query_dashed}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": f"https://www.myntra.com/search?q={query}",
+        "Accept-Language": "en-IN,en;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Referer": "https://www.myntra.com/",
     }
     
     products = []
     try:
-        print(f"📡 [Myntra] Searching for '{keyword}'...")
-        response = requests.get(url, headers=headers, timeout=10)
+        print(f"📡 [Myntra] Searching for '{keyword}' via {url}...")
+        response = requests.get(url, headers=headers, timeout=12)
+        if response.status_code != 200:
+            print(f"   ❌ Failed to load Myntra page. HTTP status: {response.status_code}")
+            return []
+            
+        soup = BeautifulSoup(response.content, "lxml")
+        match = re.search(r"window\.__myx\s*=\s*(\{.+?\});?\s*(?:window\.__INITIAL_STATE__|</script>|$)", response.text)
+        if not match:
+            print("   ❌ Error: Could not locate window.__myx JSON script tag in Myntra search source.")
+            return []
+            
+        state_data = json.loads(match.group(1))
+        search_results = state_data.get("searchData", {}).get("results", {})
+        product_list = search_results.get("products", [])
+        print(f"   🔎 Found {len(product_list)} items in Myntra search results.")
         
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get("products", [])
-            print(f"   🔎 Found {len(results)} items in Myntra search results.")
-            for item in results:
-                brand = item.get("brand", "Myntra")
-                title = f"{brand} - {item.get('additionalInfo', item.get('productName', 'Fashion Item'))}"
-                sale_price = float(item.get("price", 0))
-                original_price = float(item.get("mrp", sale_price))
-                discount_percent = float(item.get("discount", 0))
-                product_url = "https://www.myntra.com/" + item.get("landingPageUrl", "")
-                image_url = item.get("searchImage", None)
+        for item in product_list:
+            brand = item.get("brand", "Myntra")
+            product_name = item.get("productName", "")
+            title = f"{brand} - {product_name}" if brand else product_name
+            
+            sale_price = float(item.get("price", 0))
+            original_price = float(item.get("mrp", sale_price))
+            if original_price <= 0:
+                original_price = sale_price
                 
-                products.append({
-                    "name": title,
-                    "original_price": original_price,
-                    "sale_price": sale_price,
-                    "discount_percentage": discount_percent,
-                    "url": product_url,
-                    "image_url": image_url,
-                    "source": "Myntra"
-                })
-        else:
-            # Fallback mock items for demo (representing actual high-discount Myntra fashion listings)
-            print(f"   ⚠️  Myntra returned HTTP {response.status_code} (Anti-bot blockade). Using structured sample clothing deals...")
-            mock_deals = [
-                {
-                    "name": f"Roadster - Men Casual Solid Cotton {keyword.title()}",
-                    "original_price": 1499.0,
-                    "sale_price": 449.0,         # 70% discount (triggers alert!)
-                    "discount_percentage": 70.0,
-                    "url": "https://www.myntra.com/roadster-shirt-mock",
-                    "image_url": "https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a",
-                    "source": "Myntra (Demo)"
-                },
-                {
-                    "name": f"HRX by Hrithik Roshan - Running Active {keyword.title()}",
-                    "original_price": 2499.0,
-                    "sale_price": 874.0,         # 65% discount (triggers alert!)
-                    "discount_percentage": 65.0,
-                    "url": "https://www.myntra.com/hrx-mock",
-                    "image_url": "https://images.unsplash.com/photo-1542291026-7eec264c27ff",
-                    "source": "Myntra (Demo)"
-                }
-            ]
-            products.extend(mock_deals)
+            if original_price > 0 and sale_price > 0:
+                discount_percent = round(((original_price - sale_price) / original_price) * 100, 2)
+            else:
+                discount_percent = 0.0
+                
+            landing_url = item.get("landingPageUrl", "")
+            product_url = f"https://www.myntra.com/{landing_url}" if landing_url else url
+            
+            image_url = item.get("searchImage", "")
+            if image_url and image_url.startswith("http://"):
+                image_url = image_url.replace("http://", "https://")
+                
+            products.append({
+                "name": title,
+                "original_price": original_price,
+                "sale_price": sale_price,
+                "discount_percentage": discount_percent,
+                "url": product_url,
+                "image_url": image_url,
+                "source": "Myntra"
+            })
+            
     except Exception as e:
         print(f"   ❌ Myntra crawler error: {e}")
         
@@ -298,22 +300,50 @@ async def main():
     print("\n📦 SCANNING CRAWLED FASHION DEALS:")
     print("-" * 50)
     
+    posted_deals = load_posted_deals()
+    threshold = getattr(config, "MIN_DISCOUNT", 80.0)
+    max_posts = getattr(config, "MAX_POSTS_PER_SCAN", 5)
+    
     deal_count = 0
-    threshold = 60.0
+    posts_in_this_scan = 0
     
     for product in all_deals:
-        print(f"• [{product['source']}] {product['name'][:40]}... -> MRP: ₹{product['original_price']} | Sale: ₹{product['sale_price']} | Discount: {product['discount_percentage']}%")
+        discount = product["discount_percentage"]
+        product_key = product.get("id") or product.get("url")
         
-        # Check if discount exceeds the 60% threshold
-        if product["discount_percentage"] >= threshold:
-            print(f"  🔥 HOT DEAL DETECTED! ({product['discount_percentage']}% OFF)")
+        print(f"• [{product['source']}] {product['name'][:40]}... -> MRP: ₹{product['original_price']} | Sale: ₹{product['sale_price']} | Discount: {discount}%")
+        
+        # Check if discount exceeds the threshold
+        if discount >= threshold:
+            # Duplicate check
+            if product_key in posted_deals:
+                print(f"  🛡️ [DUPLICATE] '{product['name'][:30]}' already sent. Skipping...")
+                continue
+                
+            # Rate limit check
+            if posts_in_this_scan >= max_posts:
+                print(f"  ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' (max {max_posts} reached).")
+                continue
+                
+            # Determine dynamic label to log
+            category = "MEGA DEAL" if discount >= 90.0 else "HOT DEAL"
+            print(f"  🔥 {category} DETECTED! ({discount}% OFF)")
+            
             await broadcast_deal(product)
             deal_count += 1
-            # Sleep briefly to avoid flooding Telegram's API
-            await asyncio.sleep(2.0)
+            posts_in_this_scan += 1
+            
+            # Save to persistent database
+            save_posted_deal(product_key)
+            posted_deals.add(product_key)
+            
+            # Random delay to prevent rate issues
+            post_delay = random.uniform(3.0, 7.0)
+            print(f"  ⏳ Waiting {post_delay:.2f} seconds before continuing...")
+            await asyncio.sleep(post_delay)
             
     print("-" * 50)
-    print(f"✨ Crawl scan complete. Found and published {deal_count} fashion deals (>= {threshold}% off)!")
+    print(f"✨ Crawl scan complete. Found and published {posts_in_this_scan} new fashion deals (>= {threshold}% off)!")
     print("=" * 60)
 
 if __name__ == "__main__":

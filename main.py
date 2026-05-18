@@ -53,14 +53,33 @@ def run_health_server():
         print(f"⚠️ Health Web Server Error: {e}")
 
 
-# --- REAL MYNTRA INDIA WEB SCRAPER ---
+# --- UTILITY CLEANING & PARSING HELPERS ---
 
-def scrape_myntra(url: str) -> dict:
+def clean_price(price_str: str) -> float:
     """
-    Scrapes a live Myntra product page using requests + BeautifulSoup.
-    Uses regex to extract the window.__myx JSON state block (bypassing fragile HTML parsing).
+    Cleans price strings (removes ₹, commas, spaces) and returns as float.
     """
-    print(f"\n📡 Fetching Myntra product page: {url}...")
+    if not price_str:
+        return 0.0
+    clean_str = re.sub(r"[^\d.]", "", price_str)
+    try:
+        return float(clean_str)
+    except ValueError:
+        return 0.0
+
+
+def scrape_myntra(keyword: str) -> list:
+    """
+    Crawls Myntra search landing pages and parses their HTML-embedded window.__myx JSON state block.
+    """
+    import json
+    import time
+    
+    query_dashed = keyword.strip().lower().replace(" ", "-")
+    url = f"https://www.myntra.com/{query_dashed}"
+    
+    print(f"\n📡 Crawling Myntra Search Page for keyword '{keyword}':")
+    print(f"🔗 URL: {url}")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -69,131 +88,355 @@ def scrape_myntra(url: str) -> dict:
         "Referer": "https://www.myntra.com/",
     }
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        print(f"   • Response Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"   ❌ Failed to load page. HTTP status: {response.status_code}")
-            if response.status_code in [401, 403]:
-                print("   ⚠️  Myntra is blocking the request (403/401 Forbidden). Try running again or updating headers.")
-            return None
+    products = []
+    max_retries = 3
+    response = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+            if response.status_code == 200:
+                break
+            print(f"   ⚠️ Myntra returned HTTP {response.status_code}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            time.sleep(2)
+        except requests.exceptions.RequestException as e:
+            print(f"   ⚠️ Myntra request error: {e}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            time.sleep(2)
             
+    if not response or response.status_code != 200:
+        print(f"   ❌ Myntra scraping failure after {max_retries} attempts.")
+        return []
+        
+    try:
+        soup = BeautifulSoup(response.content, "lxml")
+        match = re.search(r"window\.__myx\s*=\s*(\{.+?\});?\s*(?:window\.__INITIAL_STATE__|</script>|$)", response.text)
+        if not match:
+            print("   ❌ Error: Could not locate window.__myx JSON script tag in Myntra page source.")
+            return []
+            
+        state_data = json.loads(match.group(1))
+        search_results = state_data.get("searchData", {}).get("results", {})
+        product_list = search_results.get("products", [])
+        
+        print(f"   🔎 Myntra: Found {len(product_list)} products in search results.")
+        
+        for item in product_list:
+            brand = item.get("brand", "")
+            product_name = item.get("productName", "")
+            product_title = f"{brand} - {product_name}" if brand else product_name
+            if not product_title:
+                product_title = "Myntra Fashion Item"
+                
+            mrp = float(item.get("mrp", 0))
+            sale_price = float(item.get("price", 0))
+            
+            # Skip products with missing prices
+            if mrp <= 0 or sale_price <= 0:
+                continue
+                
+            discount_percent = round(((mrp - sale_price) / mrp) * 100, 2)
+            landing_url = item.get("landingPageUrl", "")
+            product_url = f"https://www.myntra.com/{landing_url}" if landing_url else url
+            
+            image_url = item.get("searchImage", "")
+            if image_url and image_url.startswith("http://"):
+                image_url = image_url.replace("http://", "https://")
+                
+            products.append({
+                "id": str(item.get("productId", "")),
+                "name": product_title,
+                "original_price": mrp,
+                "sale_price": sale_price,
+                "discount_percentage": discount_percent,
+                "url": product_url,
+                "image_url": image_url,
+                "source": "Myntra"
+            })
+            
+        return products
+    except Exception as e:
+        print(f"   ❌ Unexpected Myntra Scraper Error: {e}")
+        return []
+
+
+def scrape_flipkart(keyword: str) -> list:
+    """
+    Crawls Flipkart search listings using requests + BeautifulSoup.
+    Uses resilient multi-selector fallbacks to parse items.
+    """
+    import time
+    
+    query = keyword.strip().replace(" ", "+")
+    url = f"https://www.flipkart.com/search?q={query}"
+    
+    print(f"\n📡 Crawling Flipkart Search Page for keyword '{keyword}':")
+    print(f"🔗 URL: {url}")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-IN,en;q=0.9,en-US;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Referer": "https://www.flipkart.com/",
+    }
+    
+    products = []
+    max_retries = 3
+    response = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+            if response.status_code == 200:
+                break
+            print(f"   ⚠️ Flipkart returned HTTP {response.status_code}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            time.sleep(2)
+        except requests.exceptions.RequestException as e:
+            print(f"   ⚠️ Flipkart request error: {e}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            time.sleep(2)
+            
+    if not response or response.status_code != 200:
+        print(f"   ❌ Flipkart scraping failure or anti-bot blockade (HTTP {response.status_code if response else 'None'}). Skipping...")
+        return []
+        
+    try:
         soup = BeautifulSoup(response.content, "lxml")
         
-        # Extract title tag as fallback title
-        title_tag = soup.find("title")
-        fallback_title = title_tag.get_text(strip=True) if title_tag else "Myntra Fashion Item"
+        # Resilient selection: div[data-id] represents product cards in search grids
+        cards = soup.select("div[data-id]") or soup.select("div._1xHGtK") or soup.select("div._4ddC5M")
+        print(f"   🔎 Flipkart: Found {len(cards)} item cards in search source.")
         
-        # 1. Search for window.__myx JSON script tag
-        print("   🔍 Searching for Myntra state JSON block (window.__myx)...")
-        # Search the entire HTML page text using our optimized regex
-        match = re.search(r"window\.__myx\s*=\s*(\{.+?\});?\s*(?:window\.__INITIAL_STATE__|</script>)", response.text)
-        
-        if not match:
-            print("   ❌ Error: Could not locate window.__myx JSON script tag in the page source.")
-            # Save raw HTML to debug to help beginner users see why it failed
-            with open("myntra_debug.html", "w", encoding="utf-8") as f:
-                f.write(response.text)
-            print("   💾 Saved raw page source to 'myntra_debug.html' for diagnostic review.")
-            return None
+        for card in cards[:20]:  # Check top 20 items
+            info_div = card.select_one("div.p0C73x")
+            if not info_div:
+                continue
+                
+            strings = list(info_div.stripped_strings)
+            if len(strings) < 3:
+                continue
+                
+            brand = strings[0]
+            # Try to get full title from the first anchor inside info_div to avoid ellipsis
+            title_a = info_div.select_one("a")
+            name_text = strings[1]
+            if title_a and title_a.get("title"):
+                name_text = title_a.get("title")
+                
+            product_title = f"{brand} - {name_text}" if brand else name_text
             
-        print("   ✅ SUCCESS: JSON state block located! Parsing JSON metadata...")
-        state_data = json.loads(match.group(1))
-        
-        pdp_data = state_data.get("pdpData")
-        if not pdp_data:
-            print("   ❌ Error: 'pdpData' key not found inside the state JSON.")
-            return None
-            
-        # 2. Extract brand, name, and compile full title
-        brand = pdp_data.get("brand", {}).get("name", "")
-        item_name = pdp_data.get("name", "")
-        product_title = f"{brand} - {item_name}" if brand else item_name
-        if not product_title:
-            product_title = fallback_title
-            
-        # 3. Extract Prices
-        price_info = pdp_data.get("price", {})
-        original_price = float(price_info.get("mrp", 0))
-        sale_price = float(price_info.get("discounted", original_price))
-        
-        # Fallbacks if keys are missing
-        if original_price <= 0:
-            original_price = float(pdp_data.get("mrp", sale_price))
-        if original_price <= 0:
-            original_price = sale_price
-            
-        # 4. Calculate Discount
-        if original_price > 0 and sale_price > 0:
-            discount_percent = round(((original_price - sale_price) / original_price) * 100, 2)
-        else:
+            # Extract prices dynamically from stripped strings
+            prices_found = []
             discount_percent = 0.0
-            
-        # 5. Extract Image URL
-        image_url = ""
-        albums = pdp_data.get("media", {}).get("albums", [])
-        if albums:
-            images = albums[0].get("images", [])
-            if images:
-                img_info = images[0]
-                secure_src = img_info.get("secureSrc", "")
-                if secure_src:
-                    # Replace placeholder variables with realistic dimensions
-                    image_url = secure_src.replace("($height)", "720").replace("($qualityPercentage)", "90").replace("($width)", "540")
+            for item in strings:
+                if "₹" in item or item.strip().replace(",", "").isdigit():
+                    val = clean_price(item)
+                    if val > 0:
+                        prices_found.append(val)
+                elif "%" in item:
+                    match = re.search(r"(\d+)%", item)
+                    if match:
+                        discount_percent = float(match.group(1))
+                        
+            if len(prices_found) < 2:
+                if len(prices_found) == 1:
+                    sale_price = prices_found[0]
+                    original_price = prices_found[0]
                 else:
-                    image_url = img_info.get("imageURL", "")
-                    
-        print("   🎉 SUCCESS: Product details extracted successfully!")
-        print(f"      • Title: {product_title[:50]}...")
-        print(f"      • MRP: ₹{original_price} | Deal Price: ₹{sale_price} | Discount: {discount_percent}%")
-        if image_url:
-            print(f"      • Image Link found: {image_url[:60]}...")
+                    continue
+            else:
+                sale_price = prices_found[0]
+                original_price = prices_found[1]
+                
+            if sale_price <= 0 or original_price <= 0:
+                continue
+                
+            # If discount percent was not matched, calculate it
+            if discount_percent <= 0:
+                discount_percent = round(((original_price - sale_price) / original_price) * 100, 2)
+                
+            # Parse URL
+            href = ""
+            anchors = card.select("a")
+            for a in anchors:
+                if a.get("href"):
+                    href = a.get("href")
+                    break
+            if not href:
+                continue
+            product_url = f"https://www.flipkart.com{href}" if href.startswith("/") else href
+            product_url = product_url.split("?")[0]
             
-        return {
-            "name": product_title,
-            "original_price": original_price,
-            "sale_price": sale_price,
-            "discount_percentage": discount_percent,
-            "url": url,
-            "image_url": image_url
-        }
-        
-    except json.JSONDecodeError as e:
-        print(f"   ❌ JSON Decoding Failure: {e}")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"   ❌ Connection Failure: {e}")
-        return None
+            # Parse Image URL
+            img_el = card.select_one("img")
+            image_url = ""
+            if img_el:
+                image_url = img_el.get("src") or img_el.get("data-src") or ""
+                
+            # Extract unique product ID
+            prod_id = card.get("data-id") or ""
+            if not prod_id and "pid=" in product_url:
+                match = re.search(r"pid=([A-Z0-9]+)", product_url)
+                if match:
+                    prod_id = match.group(1)
+            if not prod_id:
+                prod_id = product_url.split("?")[0]
+                
+            products.append({
+                "id": str(prod_id),
+                "name": product_title,
+                "original_price": original_price,
+                "sale_price": sale_price,
+                "discount_percentage": discount_percent,
+                "url": product_url,
+                "image_url": image_url,
+                "source": "Flipkart"
+            })
+            
+        return products
     except Exception as e:
-        print(f"   ❌ Unexpected Scraping Error: {e}")
-        return None
+        print(f"   ❌ Unexpected Flipkart Scraper Error: {e}")
+        return []
+
+
+def scrape_amazon(keyword: str) -> list:
+    """
+    Crawls Amazon India search listings using requests + BeautifulSoup.
+    Fails gracefully if CAPTCHA or anti-bot security blockades are served.
+    """
+    import time
+    
+    query = keyword.strip().replace(" ", "+")
+    url = f"https://www.amazon.in/s?k={query}"
+    
+    print(f"\n📡 Crawling Amazon India Search Page for keyword '{keyword}':")
+    print(f"🔗 URL: {url}")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9,en-IN;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Referer": "https://www.google.com/",
+    }
+    
+    products = []
+    max_retries = 3
+    response = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+            if response.status_code == 200:
+                # Double check for Amazon robot check page / CAPTCHA
+                if "api-services-support@amazon.com" in response.text or "captcha" in response.text.lower() or "robot check" in response.text.lower():
+                    print(f"   ⚠️ Amazon served a CAPTCHA challenge (Attempt {attempt+1}/{max_retries}). Retrying with sleep...")
+                    time.sleep(3)
+                    continue
+                break
+            print(f"   ⚠️ Amazon returned HTTP {response.status_code} (Attempt {attempt+1}/{max_retries})...")
+            time.sleep(3)
+        except requests.exceptions.RequestException as e:
+            print(f"   ⚠️ Amazon request error: {e} (Attempt {attempt+1}/{max_retries})...")
+            time.sleep(3)
+            
+    if not response or response.status_code != 200:
+        print(f"   ❌ Amazon scraping failure or anti-bot blockade (HTTP {response.status_code if response else 'None'}). Skipping...")
+        return []
+        
+    # Final check for captcha pages
+    if "api-services-support@amazon.com" in response.text or "captcha" in response.text.lower() or "robot check" in response.text.lower():
+        print("   ⚠️ [Amazon] CAPTCHA / Robot Check blockade confirmed. Skipping Amazon in this cycle.")
+        return []
+        
+    try:
+        soup = BeautifulSoup(response.content, "lxml")
+        cards = soup.select('div[data-component-type="s-search-result"]')
+        print(f"   🔎 Amazon: Found {len(cards)} item cards in search source.")
+        
+        for card in cards[:20]:  # Check top 20 items
+            asin = card.get("data-asin") or ""
+            if not asin:
+                continue
+                
+            # Parse Title
+            title_el = card.select_one("h2 a span") or card.select_one("span.a-size-base-plus") or card.select_one("span.a-size-medium")
+            if not title_el:
+                continue
+            product_title = title_el.get_text(strip=True)
+            
+            # Parse URL
+            href_el = card.select_one("h2 a")
+            if not href_el:
+                continue
+            href = href_el.get("href")
+            if not href:
+                continue
+            product_url = f"https://www.amazon.in{href}" if href.startswith("/") else href
+            product_url = product_url.split("?")[0]
+            
+            # Parse Prices
+            sale_price_el = card.select_one("span.a-price span.a-offscreen")
+            original_price_el = card.select_one("span.a-price.a-text-price span.a-offscreen") or card.select_one("span.a-text-price")
+            
+            if not sale_price_el:
+                continue
+                
+            sale_price = clean_price(sale_price_el.get_text(strip=True))
+            original_price = clean_price(original_price_el.get_text(strip=True)) if original_price_el else sale_price
+            
+            # Skip if prices are missing
+            if sale_price <= 0 or original_price <= 0:
+                continue
+                
+            discount_percent = round(((original_price - sale_price) / original_price) * 100, 2)
+            
+            # Parse Image URL
+            img_el = card.select_one("img.s-image")
+            image_url = img_el.get("src") if img_el else ""
+            
+            products.append({
+                "id": str(asin),
+                "name": product_title,
+                "original_price": original_price,
+                "sale_price": sale_price,
+                "discount_percentage": discount_percent,
+                "url": product_url,
+                "image_url": image_url,
+                "source": "Amazon India"
+            })
+            
+        return products
+    except Exception as e:
+        print(f"   ❌ Unexpected Amazon Scraper Error: {e}")
+        return []
+
 
 
 # --- CORE TELEGRAM FORMATTERS ---
 
 def format_deal_message(product: dict, discount_percent: float) -> str:
     """
-    Formats a professional, stunning Indian-style Telegram alert in Rupees (₹) using HTML.
-    Includes strikethroughs, bolding, clean spacing, and a limited time hurry notice.
+    Formats a shorter, cleaner, and highly professional premium Telegram alert.
+    Categorizes dynamically:
+    - 90%+ = MEGA DEAL
+    - 80%+ = HOT DEAL
     """
-    saving_amount = round(product["original_price"] - product["sale_price"], 2)
+    saving = int(round(product["original_price"] - product["sale_price"]))
+    mrp = int(round(product["original_price"]))
+    deal = int(round(product["sale_price"]))
     
-    # Format prices as integers if they are whole numbers (e.g. ₹999 instead of ₹999.00)
-    mrp_formatted = f"{int(product['original_price'])}" if product['original_price'].is_integer() else f"{product['original_price']:.2f}"
-    deal_formatted = f"{int(product['sale_price'])}" if product['sale_price'].is_integer() else f"{product['sale_price']:.2f}"
-    save_formatted = f"{int(saving_amount)}" if saving_amount.is_integer() else f"{saving_amount:.2f}"
-
+    # Determine the category label based on discount percentage
+    if discount_percent >= 90.0:
+        label = "🔥 <b>MEGA DEAL ALERT</b> 🔥"
+    else:
+        label = "⚡ <b>HOT DEAL ALERT</b> ⚡"
+        
+    # Shorter, cleaner premium layout
     message = (
-        "🔥 <b>MEGA DEAL ALERT</b> 🔥\n\n"
+        f"{label}\n\n"
         f"📦 <b>{product['name']}</b>\n\n"
-        f"💰 <b>MRP:</b> <s>₹{mrp_formatted}</s>\n"
-        f"⚡ <b>Deal Price:</b> <span class=\"tg-spoiler\"><b>₹{deal_formatted}</b></span>\n"
-        f"🎯 <b>Discount:</b> {discount_percent}% OFF\n"
-        f"💸 <b>Save:</b> ₹{save_formatted}\n\n"
-        f"🛒 <b>Buy Now:</b>\n"
-        f"👉 {product['url']}\n\n"
-        "⏳ <i>Hurry! Limited Stock</i>"
+        f"💰 <b>MRP:</b> <s>₹{mrp}</s> | <b>Deal Price:</b> ₹{deal}\n"
+        f"🎯 <b>Discount:</b> {int(round(discount_percent))}% OFF (Save ₹{saving})\n\n"
+        f"🛒 <b>Order Here:</b>\n"
+        f"👉 {product['url']}"
     )
     return message
 
@@ -233,37 +476,179 @@ async def send_telegram_message(bot_client: telegram.Bot, channel_chat_id: str, 
             )
 
 
+# --- PERSISTENT DUPLICATE FILTER DATABASE ---
+
+def load_posted_deals() -> set:
+    """
+    Loads previously posted deal IDs or URLs from a local JSON file.
+    If the file does not exist, returns an empty set.
+    """
+    db_file = getattr(config, "DUPLICATE_DB_FILE", "posted_deals.json")
+    if not os.path.exists(db_file):
+        return set()
+    try:
+        with open(db_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Ensure we return a set of strings for extremely fast lookup
+            return set(str(item) for item in data)
+    except Exception as e:
+        print(f"⚠️ Error loading persistent duplicates database: {e}")
+        return set()
+
+def save_posted_deal(product_id: str):
+    """
+    Appends a new successfully published product ID/URL to our local JSON database.
+    """
+    db_file = getattr(config, "DUPLICATE_DB_FILE", "posted_deals.json")
+    posted = list(load_posted_deals())
+    if product_id not in posted:
+        posted.append(product_id)
+        try:
+            with open(db_file, "w", encoding="utf-8") as f:
+                json.dump(posted, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Error writing to duplicates database: {e}")
+
+
 # --- MAIN WORKFLOW SCANNERS ---
 
 async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_run: bool):
     """
-    Loads the real Myntra URL from config, crawls it live, parses details,
-    and broadcasts to Telegram immediately if successful.
+    Loops through the configured keywords, crawls their live search result pages from
+    Myntra, Flipkart, and Amazon India, evaluates all found products, and automatically
+    pushes active deals (discount >= DISCOUNT_THRESHOLD) to Telegram.
+    Includes rate limits, persistent duplicate filtering, dynamic category tags, and random delays.
     """
-    target_url = config.MYNTRA_PRODUCT_URL
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Starting real-time product scan...")
-    print(f"🔗 Target URL: {target_url}")
+    import random
     
-    product = scrape_myntra(target_url)
+    # 1. Load already posted deals from the JSON database and settings
+    posted_deals = load_posted_deals()
+    min_discount = getattr(config, "DISCOUNT_THRESHOLD", 80.0)
+    max_posts_per_scan = getattr(config, "MAX_DEALS_PER_SCAN", 5)
+    delay_min = getattr(config, "REQUEST_DELAY_MIN", 3.0)
+    delay_max = getattr(config, "REQUEST_DELAY_MAX", 7.0)
     
-    if not product:
-        print("❌ Scan failed: Could not scrape Myntra details.")
-        return
+    print(f"\n============================================================")
+    print(f"🔄 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting live multi-site deal scan...")
+    print(f"📊 Settings: Threshold >= {min_discount}% | Rate Limit: {max_posts_per_scan} posts/scan")
+    print(f"============================================================")
+    
+    total_products_scraped = 0
+    deals_detected_count = 0
+    deals_published_count = 0
+    posts_in_this_scan = 0
+    
+    for i, keyword in enumerate(config.KEYWORDS):
+        print(f"\n🔍 [Category {i+1}/{len(config.KEYWORDS)}] Searching for: '{keyword.upper()}' across all stores")
         
-    print(f"✨ Scraped details verified. Preparing Telegram broadcast alert...")
-    deal_message = format_deal_message(product, product["discount_percentage"])
-    
-    try:
-        await send_telegram_message(
-            bot_client=bot_client,
-            channel_chat_id=channel_chat_id,
-            message=deal_message,
-            image_url=product["image_url"],
-            is_dry_run=is_dry_run
-        )
-        print("🎉 SUCCESS! Real deal alert published to your Telegram channel successfully.")
-    except Exception as e:
-        print(f"❌ Failed to broadcast live deal: {e}")
+        keyword_products = []
+        
+        # --- Store 1: Myntra ---
+        myntra_items = scrape_myntra(keyword)
+        print(f"   • Myntra: Scraped {len(myntra_items)} items.")
+        keyword_products.extend(myntra_items)
+        
+        # Polite delay
+        delay = random.uniform(delay_min, delay_max)
+        print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
+        await asyncio.sleep(delay)
+        
+        # --- Store 2: Flipkart ---
+        flipkart_items = scrape_flipkart(keyword)
+        print(f"   • Flipkart: Scraped {len(flipkart_items)} items.")
+        keyword_products.extend(flipkart_items)
+        
+        # Polite delay
+        delay = random.uniform(delay_min, delay_max)
+        print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
+        await asyncio.sleep(delay)
+        
+        # --- Store 3: Amazon India ---
+        amazon_items = scrape_amazon(keyword)
+        print(f"   • Amazon India: Scraped {len(amazon_items)} items.")
+        keyword_products.extend(amazon_items)
+        
+        product_count = len(keyword_products)
+        total_products_scraped += product_count
+        
+        if not keyword_products:
+            print(f"⚠️ Scraping returned 0 items from all stores for keyword: '{keyword}'")
+            continue
+            
+        print(f"   🚀 Aggregated SUCCESS! Found {product_count} total products for '{keyword}'.")
+        
+        # Iterate and evaluate all combined crawled products
+        keyword_deals_count = 0
+        for idx, product in enumerate(keyword_products):
+            discount = product["discount_percentage"]
+            product_key = product.get("id") or product.get("url")
+            store_name = product.get("source", "Unknown Store")
+            
+            # Print periodic progress logs
+            if idx % 10 == 0 or discount >= min_discount:
+                print(f"   • [{store_name}] [{idx+1:02d}/{product_count:02d}] {product['name'][:30]}... | Price: ₹{product['sale_price']} | MRP: ₹{product['original_price']} | Discount: {discount}%")
+                
+            # Filter criteria 1: Must be >= DISCOUNT_THRESHOLD discount
+            if discount >= min_discount:
+                deals_detected_count += 1
+                
+                # Filter criteria 2: Duplicate check
+                if product_key in posted_deals:
+                    print(f"     🛡️ [DUPLICATE FILTERED] '{product['name'][:30]}' (ID/ASIN: {product_key}) has already been sent. Skipping...")
+                    continue
+                
+                # Classify the deal
+                if discount >= 90.0:
+                    category = "MEGA DEAL"
+                else:
+                    category = "HOT DEAL"
+                    
+                # Filter criteria 3: Rate Limiting (Max 5 Telegram posts per scan)
+                if posts_in_this_scan >= max_posts_per_scan:
+                    print(f"     ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
+                    continue
+                
+                keyword_deals_count += 1
+                print(f"     🔥 {category} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
+                
+                # Build professional telegram card
+                deal_message = format_deal_message(product, discount)
+                deal_message += f"\n🏪 <b>Store:</b> {store_name}"
+                
+                # Automatically send deal to Telegram
+                try:
+                    await send_telegram_message(
+                        bot_client=bot_client,
+                        channel_chat_id=channel_chat_id,
+                        message=deal_message,
+                        image_url=product["image_url"],
+                        is_dry_run=is_dry_run
+                    )
+                    deals_published_count += 1
+                    posts_in_this_scan += 1
+                    
+                    # Record to persistent duplicates database immediately
+                    save_posted_deal(product_key)
+                    posted_deals.add(product_key)
+                    
+                    print(f"     🎉 SUCCESS! Published {category} card to Telegram.")
+                    
+                    # Polite random delay after sending Telegram message to avoid rate limits
+                    post_delay = random.uniform(3.0, 7.0)
+                    print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
+                    await asyncio.sleep(post_delay)
+                except Exception as e:
+                    print(f"     ❌ Failed to send Telegram card: {e}")
+                    
+        print(f"   ✨ Category '{keyword}' scan complete. Published {keyword_deals_count} new deals.")
+        
+    print(f"\n============================================================")
+    print(f"📊 SUMMARY OF WORKFLOW SCAN:")
+    print(f"   • Total Products Checked: {total_products_scraped}")
+    print(f"   • Total Hot Deals Detected (>= {min_discount}%): {deals_detected_count}")
+    print(f"   • Successfully Broadcasted This Scan: {posts_in_this_scan}")
+    print(f"   • Cumulative Deals Sent in Session: {deals_published_count}")
+    print(f"============================================================")
 
 
 # --- MAIN RUNNER & SCHEDULER LOOP ---
@@ -293,8 +678,8 @@ async def main():
         try:
             startup_test_msg = (
                 "🤖 <b>Bot Connection Successful!</b>\n\n"
-                "The Myntra Real-Scraper Deal Automation Bot is now online! "
-                "It will crawl your target Myntra link and post live updates."
+                "The Myntra Live-Crawler Deal Automation Bot is now online!\n"
+                "It will scan live Myntra search results for key categories and automatically post deals with discounts >= 80%!"
             )
             await bot_client.send_message(
                 chat_id=channel_id,

@@ -21,8 +21,11 @@ if env_path.exists():
 # Telegram Bot Token (obtained from @BotFather)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
-# Telegram Channel Username or ID (e.g., @mydealalerts or -100123456789)
-CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME", "@YOUR_CHANNEL_USERNAME_HERE")
+# Telegram Private Review Channel (where crawler sends raw deals for review)
+PRIVATE_REVIEW_CHANNEL = os.getenv("TELEGRAM_PRIVATE_REVIEW_CHANNEL", "@YOUR_PRIVATE_CHANNEL_HERE")
+
+# Telegram Public Deals Channel (where approved deals are published manually)
+PUBLIC_DEALS_CHANNEL = os.getenv("TELEGRAM_PUBLIC_DEALS_CHANNEL", "@YOUR_PUBLIC_CHANNEL_HERE")
 
 # Target Real Myntra Product URL to scrape
 MYNTRA_PRODUCT_URL = os.getenv("MYNTRA_PRODUCT_URL", "https://www.myntra.com/1364628")
@@ -46,9 +49,10 @@ def is_configured() -> bool:
     with their real Telegram bot credentials.
     """
     has_token = BOT_TOKEN and BOT_TOKEN != "YOUR_BOT_TOKEN_HERE"
-    has_channel = CHANNEL_USERNAME and CHANNEL_USERNAME != "@YOUR_CHANNEL_USERNAME_HERE"
+    has_private = PRIVATE_REVIEW_CHANNEL and PRIVATE_REVIEW_CHANNEL != "@YOUR_PRIVATE_CHANNEL_HERE"
+    has_public = PUBLIC_DEALS_CHANNEL and PUBLIC_DEALS_CHANNEL != "@YOUR_PUBLIC_CHANNEL_HERE"
     
-    return bool(has_token and has_channel)
+    return bool(has_token and has_private and has_public)
 
 def print_configuration_help():
     """
@@ -60,8 +64,9 @@ def print_configuration_help():
     print("=" * 60)
     print("It looks like you haven't set up your credentials yet!")
     print("\nTo fix this:")
-    print("1. Open the '.env' file in the 'telegram-deal-bot' folder.")
+    print("1. Open the '.env' file in the base directory.")
     print("2. Replace 'YOUR_BOT_TOKEN_HERE' with the token from @BotFather.")
-    print("3. Replace '@YOUR_CHANNEL_USERNAME_HERE' with your Telegram Channel username.")
-    print("\nOnce configured correctly, restart the script to start deal automated posts!")
+    print("3. Set 'TELEGRAM_PRIVATE_REVIEW_CHANNEL' with your Private Review Channel username.")
+    print("4. Set 'TELEGRAM_PUBLIC_DEALS_CHANNEL' with your Public Deals Channel username.")
+    print("\nOnce configured correctly, restart the script to start automated review posts!")
     print("=" * 60)

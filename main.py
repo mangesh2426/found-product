@@ -441,6 +441,37 @@ def format_deal_message(product: dict, discount_percent: float) -> str:
     return message
 
 
+def format_review_message(product: dict, discount_percent: float) -> str:
+    """
+    Formats a highly structured message specifically tailored for the PRIVATE review channel.
+    Includes all metadata plus clear review/action labels.
+    """
+    saving = int(round(product["original_price"] - product["sale_price"]))
+    mrp = int(round(product["original_price"]))
+    deal = int(round(product["sale_price"]))
+    
+    if discount_percent >= 90.0:
+        label = "🚨 <b>[MEGA DEAL PENDING REVIEW]</b> 🚨"
+    else:
+        label = "⏳ <b>[HOT DEAL PENDING REVIEW]</b> ⏳"
+        
+    message = (
+        f"{label}\n\n"
+        f"📋 <b>Product Name:</b> {product['name']}\n"
+        f"🏷️ <b>Brand/Source:</b> {product.get('source', 'Myntra')}\n\n"
+        f"💵 <b>MRP (Original Price):</b> <s>₹{mrp}</s>\n"
+        f"💰 <b>Deal Price (Current Price):</b> ₹{deal}\n"
+        f"📉 <b>Discount Percentage:</b> {int(round(discount_percent))}% OFF\n"
+        f"💸 <b>You Save:</b> ₹{saving}\n\n"
+        f"🔗 <b>Product Original URL:</b>\n"
+        f"{product['url']}\n\n"
+        f"📝 <b>Action Instructions:</b>\n"
+        f"1. Generate your affiliate link for this product.\n"
+        f"2. Forward/post the approved details to the Public Channel: {config.PUBLIC_DEALS_CHANNEL}."
+    )
+    return message
+
+
 async def send_telegram_message(bot_client: telegram.Bot, channel_chat_id: str, message: str, image_url: str, is_dry_run: bool):
     """
     Sends the formatted message to the Telegram channel.
@@ -631,9 +662,8 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     keyword_deals_count += 1
                     print(f"     🔥 {category} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
                     
-                    # Build professional telegram card
-                    deal_message = format_deal_message(product, discount)
-                    deal_message += f"\n🏪 <b>Store:</b> {store_name}"
+                    # Build professional telegram card for private review
+                    deal_message = format_review_message(product, discount)
                     
                     # Automatically send deal to Telegram
                     try:
@@ -693,23 +723,25 @@ async def main():
     is_live_ready = config.is_configured()
     
     bot_client = None
-    channel_id = None
+    private_channel = None
+    public_channel = None
     
     if is_live_ready:
         print("🟢 STATUS: Credentials configured! Starting in LIVE mode.")
         bot_client = telegram.Bot(token=config.BOT_TOKEN)
-        channel_id = config.CHANNEL_USERNAME
+        private_channel = config.PRIVATE_REVIEW_CHANNEL
+        public_channel = config.PUBLIC_DEALS_CHANNEL
         
-        # Automatically send a startup connection test message to the channel
-        print("📨 Sending test connection message to your channel...")
+        # Automatically send a startup connection test message to the private review channel
+        print(f"📨 Sending test connection message to Private Review Channel ({private_channel})...")
         try:
             startup_test_msg = (
                 "🤖 <b>Bot Connection Successful!</b>\n\n"
-                "The Myntra Live-Crawler Deal Automation Bot is now online!\n"
-                "It will scan live Myntra search results for key categories and automatically post deals with discounts >= 80%!"
+                "The Myntra Live-Crawler Deal Automation Bot is now online in <b>Review Workflow Mode</b>!\n"
+                "It will scan live Myntra search results for key categories and automatically post deals to this channel for your manual review and approval."
             )
             await bot_client.send_message(
-                chat_id=channel_id,
+                chat_id=private_channel,
                 text=startup_test_msg,
                 parse_mode="HTML"
             )
@@ -718,7 +750,7 @@ async def main():
             print(f"❌ Failed to send startup message: {e}")
             print("Please double check that:")
             print("1. Your Bot Token is correct.")
-            print(f"2. The bot is added as an Administrator to the channel {config.CHANNEL_USERNAME}.")
+            print(f"2. The bot is added as an Administrator to your Private Channel: {private_channel}.")
             print("Switching back to Dry-Run mode to prevent program crash...\n")
             is_live_ready = False
             
@@ -727,7 +759,8 @@ async def main():
         print("This allows you to see how the bot behaves without needing actual Telegram tokens!")
         config.print_configuration_help()
         bot_client = None
-        channel_id = None
+        private_channel = None
+        public_channel = None
 
     # --- Scheduler Continuous Loop (Runs every SCAN_INTERVAL minutes) ---
     scan_interval = getattr(config, "SCAN_INTERVAL", 5)
@@ -741,7 +774,7 @@ async def main():
             print(f"\n⏰ [{scan_start.strftime('%Y-%m-%d %H:%M:%S')}] --- SCAN CYCLE STARTED ---")
             
             # Run the deal finder logic
-            await scan_for_deals(bot_client, channel_id, is_dry_run=(not is_live_ready))
+            await scan_for_deals(bot_client, private_channel, is_dry_run=(not is_live_ready))
             
             scan_end = datetime.now()
             duration = scan_end - scan_start

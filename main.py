@@ -16,7 +16,7 @@ import os
 import re
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 import requests
 from bs4 import BeautifulSoup
@@ -526,7 +526,7 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
     min_discount = getattr(config, "DISCOUNT_THRESHOLD", 80.0)
     max_posts_per_scan = getattr(config, "MAX_DEALS_PER_SCAN", 5)
     delay_min = getattr(config, "REQUEST_DELAY_MIN", 3.0)
-    delay_max = getattr(config, "REQUEST_DELAY_MAX", 7.0)
+    delay_max = getattr(config, "REQUEST_DELAY_MAX", 8.0)
     
     print(f"\n============================================================")
     print(f"🔄 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting live multi-site deal scan...")
@@ -634,7 +634,7 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     print(f"     🎉 SUCCESS! Published {category} card to Telegram.")
                     
                     # Polite random delay after sending Telegram message to avoid rate limits
-                    post_delay = random.uniform(3.0, 7.0)
+                    post_delay = random.uniform(delay_min, delay_max)
                     print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
                     await asyncio.sleep(post_delay)
                 except Exception as e:
@@ -702,18 +702,30 @@ async def main():
         bot_client = None
         channel_id = None
 
-    # --- Scheduler Continuous Loop (Runs every 5 minutes / 300 seconds) ---
-    interval_seconds = 300
+    # --- Scheduler Continuous Loop (Runs every SCAN_INTERVAL minutes) ---
+    scan_interval = getattr(config, "SCAN_INTERVAL", 5)
+    interval_seconds = scan_interval * 60
     
-    print(f"\n🔄 Scheduler active. Running deal scanning loop every {interval_seconds // 60} minutes.")
+    print(f"\n🔄 Scheduler active. Running deal scanning loop every {scan_interval} minutes.")
     
     try:
         while True:
+            scan_start = datetime.now()
+            print(f"\n⏰ [{scan_start.strftime('%Y-%m-%d %H:%M:%S')}] --- SCAN CYCLE STARTED ---")
+            
             # Run the deal finder logic
             await scan_for_deals(bot_client, channel_id, is_dry_run=(not is_live_ready))
             
-            # Print countdown log
-            print(f"⏳ Sleeping for {interval_seconds // 60} minutes. Press Ctrl+C to stop the bot...")
+            scan_end = datetime.now()
+            duration = scan_end - scan_start
+            next_run = scan_end + timedelta(seconds=interval_seconds)
+            
+            print(f"\n⏰ [{scan_end.strftime('%Y-%m-%d %H:%M:%S')}] --- SCAN CYCLE COMPLETED ---")
+            print(f"⏱️ Cycle Duration: {duration.total_seconds():.2f} seconds")
+            print(f"⏳ Sleeping for {scan_interval} minutes.")
+            print(f"📅 Next scheduled scan cycle at: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Press Ctrl+C to stop the bot...")
+            
             await asyncio.sleep(interval_seconds)
             
     except KeyboardInterrupt:

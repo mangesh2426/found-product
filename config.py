@@ -31,10 +31,11 @@ MYNTRA_PRODUCT_URL = os.getenv("MYNTRA_PRODUCT_URL", "https://www.myntra.com/136
 KEYWORDS = ["men tshirt", "sneakers", "hoodie", "women kurti"]
 
 # Advanced Deal Filtering & Rate Limiting Settings
+SCAN_INTERVAL = 5               # Run full product scan every 5 minutes only
 DISCOUNT_THRESHOLD = 80.0       # Only send deals with discount >= 80%
 MAX_DEALS_PER_SCAN = 5          # Maximum Telegram posts per search scan
 REQUEST_DELAY_MIN = 3.0         # Minimum random delay in seconds between scraping pages
-REQUEST_DELAY_MAX = 7.0         # Maximum random delay in seconds between scraping pages
+REQUEST_DELAY_MAX = 8.0         # Maximum random delay in seconds between scraping pages
 DUPLICATE_DB_FILE = "posted_deals.json"  # Persistent database for posted deals
 
 

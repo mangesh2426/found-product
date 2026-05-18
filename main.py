@@ -15,14 +15,42 @@ import sys
 import os
 import re
 import json
+import threading
 from datetime import datetime, timedelta
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 import requests
 from bs4 import BeautifulSoup
 import telegram  # Imported from python-telegram-bot
 
 # Import local configuration and safety checks
-# Import local configuration and safety checks
 import config
+
+# --- PRODUCTION PORT-BINDING SERVER FOR RENDER (FREE WEB SERVICE TIER HACK) ---
+class HealthCheckHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            self.wfile.write("<html><body><h2 style='color:#2ecc71; font-family: sans-serif;'>\n"
+                             "🟢 Telegram Deal Bot is online and running successfully!</h2></body></html>".encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    # Disable standard logging in HTTP server to keep Render logs clean and readable
+    def log_message(self, format, *args):
+        return
+
+def run_health_server():
+    try:
+        # Render will pass the port dynamically via PORT environment variable
+        port = int(os.getenv("PORT", 8080))
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        print(f"📡 Free Tier Port-Binder: Server running on port {port}...")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ Health Web Server Error: {e}")
 
 
 # --- UTILITY CLEANING & PARSING HELPERS ---
@@ -534,49 +562,31 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     await asyncio.sleep(2)
             keyword_products.extend(myntra_items)
             
-            # Polite delay
-            delay = random.uniform(delay_min, delay_max)
-            print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
-            await asyncio.sleep(delay)
+            # --- Store 2: Flipkart (Disabled for Free-Tier Web Service lightweight scan) ---
+            # flipkart_items = []
+            # for attempt in range(max_scrape_retries):
+            #     print(f"   📡 [Flipkart Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+            #     try:
+            #         flipkart_items = scrape_flipkart(keyword)
+            #         if flipkart_items:
+            #             print(f"      ✅ Flipkart SUCCESS: Found {len(flipkart_items)} products.")
+            #             break
+            #     except Exception as e:
+            #         print(f"      ❌ Flipkart scraping attempt error: {e}")
+            # keyword_products.extend(flipkart_items)
             
-            # --- Store 2: Flipkart ---
-            flipkart_items = []
-            for attempt in range(max_scrape_retries):
-                print(f"   📡 [Flipkart Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
-                try:
-                    flipkart_items = scrape_flipkart(keyword)
-                    if flipkart_items:
-                        print(f"      ✅ Flipkart SUCCESS: Found {len(flipkart_items)} products.")
-                        break
-                    else:
-                        print(f"      ⚠️ Flipkart returned 0 products. Retrying after delay...")
-                except Exception as e:
-                    print(f"      ❌ Flipkart scraping attempt error: {e}")
-                if attempt < max_scrape_retries - 1:
-                    await asyncio.sleep(2)
-            keyword_products.extend(flipkart_items)
-            
-            # Polite delay
-            delay = random.uniform(delay_min, delay_max)
-            print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
-            await asyncio.sleep(delay)
-            
-            # --- Store 3: Amazon India ---
-            amazon_items = []
-            for attempt in range(max_scrape_retries):
-                print(f"   📡 [Amazon Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
-                try:
-                    amazon_items = scrape_amazon(keyword)
-                    if amazon_items:
-                        print(f"      ✅ Amazon SUCCESS: Found {len(amazon_items)} products.")
-                        break
-                    else:
-                        print(f"      ⚠️ Amazon returned 0 products. Retrying after delay...")
-                except Exception as e:
-                    print(f"      ❌ Amazon scraping attempt error: {e}")
-                if attempt < max_scrape_retries - 1:
-                    await asyncio.sleep(2)
-            keyword_products.extend(amazon_items)
+            # --- Store 3: Amazon India (Disabled for Free-Tier Web Service lightweight scan) ---
+            # amazon_items = []
+            # for attempt in range(max_scrape_retries):
+            #     print(f"   📡 [Amazon Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+            #     try:
+            #         amazon_items = scrape_amazon(keyword)
+            #         if amazon_items:
+            #             print(f"      ✅ Amazon SUCCESS: Found {len(amazon_items)} products.")
+            #             break
+            #     except Exception as e:
+            #         print(f"      ❌ Amazon scraping attempt error: {e}")
+            # keyword_products.extend(amazon_items)
             
             product_count = len(keyword_products)
             total_products_scraped += product_count
@@ -672,8 +682,12 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
 async def main():
     print("=" * 60)
     print("🤖 TELEGRAM DEAL AUTOMATION BOT INITIALIZED 🤖")
-    print("⚙️ MODE: Render Background Worker (Continuous Daemon)")
+    print("⚙️ MODE: Render Free Web Service (Lightweight Daemon)")
     print("=" * 60)
+    
+    # Start Render Free Web Service port-binding health server in the background
+    print("📡 Launching background TCP port-binding server for Render health checks...")
+    threading.Thread(target=run_health_server, daemon=True).start()
     
     # Check if credentials are configured
     is_live_ready = config.is_configured()

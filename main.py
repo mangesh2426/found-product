@@ -521,134 +521,178 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
     """
     import random
     
-    # 1. Load already posted deals from the JSON database and settings
-    posted_deals = load_posted_deals()
-    min_discount = getattr(config, "DISCOUNT_THRESHOLD", 80.0)
-    max_posts_per_scan = getattr(config, "MAX_DEALS_PER_SCAN", 5)
-    delay_min = getattr(config, "REQUEST_DELAY_MIN", 3.0)
-    delay_max = getattr(config, "REQUEST_DELAY_MAX", 8.0)
-    
-    print(f"\n============================================================")
-    print(f"🔄 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting live multi-site deal scan...")
-    print(f"📊 Settings: Threshold >= {min_discount}% | Rate Limit: {max_posts_per_scan} posts/scan")
-    print(f"============================================================")
-    
-    total_products_scraped = 0
-    deals_detected_count = 0
-    deals_published_count = 0
-    posts_in_this_scan = 0
-    
-    for i, keyword in enumerate(config.KEYWORDS):
-        print(f"\n🔍 [Category {i+1}/{len(config.KEYWORDS)}] Searching for: '{keyword.upper()}' across all stores")
+    try:
+        # 1. Load already posted deals from the JSON database and settings
+        posted_deals = load_posted_deals()
+        min_discount = getattr(config, "DISCOUNT_THRESHOLD", 80.0)
+        max_posts_per_scan = getattr(config, "MAX_DEALS_PER_SCAN", 5)
+        delay_min = getattr(config, "REQUEST_DELAY_MIN", 3.0)
+        delay_max = getattr(config, "REQUEST_DELAY_MAX", 8.0)
         
-        keyword_products = []
+        print(f"\n============================================================")
+        print(f"🔄 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting live multi-site deal scan...")
+        print(f"📊 Settings: Threshold >= {min_discount}% | Rate Limit: {max_posts_per_scan} posts/scan")
+        print(f"============================================================")
         
-        # --- Store 1: Myntra ---
-        myntra_items = scrape_myntra(keyword)
-        print(f"   • Myntra: Scraped {len(myntra_items)} items.")
-        keyword_products.extend(myntra_items)
+        total_products_scraped = 0
+        deals_detected_count = 0
+        deals_published_count = 0
+        posts_in_this_scan = 0
+        max_scrape_retries = 2
         
-        # Polite delay
-        delay = random.uniform(delay_min, delay_max)
-        print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
-        await asyncio.sleep(delay)
-        
-        # --- Store 2: Flipkart ---
-        flipkart_items = scrape_flipkart(keyword)
-        print(f"   • Flipkart: Scraped {len(flipkart_items)} items.")
-        keyword_products.extend(flipkart_items)
-        
-        # Polite delay
-        delay = random.uniform(delay_min, delay_max)
-        print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
-        await asyncio.sleep(delay)
-        
-        # --- Store 3: Amazon India ---
-        amazon_items = scrape_amazon(keyword)
-        print(f"   • Amazon India: Scraped {len(amazon_items)} items.")
-        keyword_products.extend(amazon_items)
-        
-        product_count = len(keyword_products)
-        total_products_scraped += product_count
-        
-        if not keyword_products:
-            print(f"⚠️ Scraping returned 0 items from all stores for keyword: '{keyword}'")
-            continue
+        for i, keyword in enumerate(config.KEYWORDS):
+            print(f"\n🔍 [Category {i+1}/{len(config.KEYWORDS)}] Searching for: '{keyword.upper()}' across all stores")
             
-        print(f"   🚀 Aggregated SUCCESS! Found {product_count} total products for '{keyword}'.")
-        
-        # Iterate and evaluate all combined crawled products
-        keyword_deals_count = 0
-        for idx, product in enumerate(keyword_products):
-            discount = product["discount_percentage"]
-            product_key = product.get("id") or product.get("url")
-            store_name = product.get("source", "Unknown Store")
+            keyword_products = []
             
-            # Print periodic progress logs
-            if idx % 10 == 0 or discount >= min_discount:
-                print(f"   • [{store_name}] [{idx+1:02d}/{product_count:02d}] {product['name'][:30]}... | Price: ₹{product['sale_price']} | MRP: ₹{product['original_price']} | Discount: {discount}%")
-                
-            # Filter criteria 1: Must be >= DISCOUNT_THRESHOLD discount
-            if discount >= min_discount:
-                deals_detected_count += 1
-                
-                # Filter criteria 2: Duplicate check
-                if product_key in posted_deals:
-                    print(f"     🛡️ [DUPLICATE FILTERED] '{product['name'][:30]}' (ID/ASIN: {product_key}) has already been sent. Skipping...")
-                    continue
-                
-                # Classify the deal
-                if discount >= 90.0:
-                    category = "MEGA DEAL"
-                else:
-                    category = "HOT DEAL"
-                    
-                # Filter criteria 3: Rate Limiting (Max 5 Telegram posts per scan)
-                if posts_in_this_scan >= max_posts_per_scan:
-                    print(f"     ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
-                    continue
-                
-                keyword_deals_count += 1
-                print(f"     🔥 {category} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
-                
-                # Build professional telegram card
-                deal_message = format_deal_message(product, discount)
-                deal_message += f"\n🏪 <b>Store:</b> {store_name}"
-                
-                # Automatically send deal to Telegram
+            # --- Store 1: Myntra ---
+            myntra_items = []
+            for attempt in range(max_scrape_retries):
+                print(f"   📡 [Myntra Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
                 try:
-                    await send_telegram_message(
-                        bot_client=bot_client,
-                        channel_chat_id=channel_chat_id,
-                        message=deal_message,
-                        image_url=product["image_url"],
-                        is_dry_run=is_dry_run
-                    )
-                    deals_published_count += 1
-                    posts_in_this_scan += 1
-                    
-                    # Record to persistent duplicates database immediately
-                    save_posted_deal(product_key)
-                    posted_deals.add(product_key)
-                    
-                    print(f"     🎉 SUCCESS! Published {category} card to Telegram.")
-                    
-                    # Polite random delay after sending Telegram message to avoid rate limits
-                    post_delay = random.uniform(delay_min, delay_max)
-                    print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
-                    await asyncio.sleep(post_delay)
+                    myntra_items = scrape_myntra(keyword)
+                    if myntra_items:
+                        print(f"      ✅ Myntra SUCCESS: Found {len(myntra_items)} products.")
+                        break
+                    else:
+                        print(f"      ⚠️ Myntra returned 0 products. Retrying after delay...")
                 except Exception as e:
-                    print(f"     ❌ Failed to send Telegram card: {e}")
+                    print(f"      ❌ Myntra scraping attempt error: {e}")
+                if attempt < max_scrape_retries - 1:
+                    await asyncio.sleep(2)
+            keyword_products.extend(myntra_items)
+            
+            # Polite delay
+            delay = random.uniform(delay_min, delay_max)
+            print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
+            await asyncio.sleep(delay)
+            
+            # --- Store 2: Flipkart ---
+            flipkart_items = []
+            for attempt in range(max_scrape_retries):
+                print(f"   📡 [Flipkart Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+                try:
+                    flipkart_items = scrape_flipkart(keyword)
+                    if flipkart_items:
+                        print(f"      ✅ Flipkart SUCCESS: Found {len(flipkart_items)} products.")
+                        break
+                    else:
+                        print(f"      ⚠️ Flipkart returned 0 products. Retrying after delay...")
+                except Exception as e:
+                    print(f"      ❌ Flipkart scraping attempt error: {e}")
+                if attempt < max_scrape_retries - 1:
+                    await asyncio.sleep(2)
+            keyword_products.extend(flipkart_items)
+            
+            # Polite delay
+            delay = random.uniform(delay_min, delay_max)
+            print(f"   ⏳ Waiting {delay:.2f}s polite delay between stores...")
+            await asyncio.sleep(delay)
+            
+            # --- Store 3: Amazon India ---
+            amazon_items = []
+            for attempt in range(max_scrape_retries):
+                print(f"   📡 [Amazon Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+                try:
+                    amazon_items = scrape_amazon(keyword)
+                    if amazon_items:
+                        print(f"      ✅ Amazon SUCCESS: Found {len(amazon_items)} products.")
+                        break
+                    else:
+                        print(f"      ⚠️ Amazon returned 0 products. Retrying after delay...")
+                except Exception as e:
+                    print(f"      ❌ Amazon scraping attempt error: {e}")
+                if attempt < max_scrape_retries - 1:
+                    await asyncio.sleep(2)
+            keyword_products.extend(amazon_items)
+            
+            product_count = len(keyword_products)
+            total_products_scraped += product_count
+            
+            if not keyword_products:
+                print(f"⚠️ Scraping returned 0 items from all stores for keyword: '{keyword}'")
+                continue
+                
+            print(f"   🚀 Aggregated SUCCESS! Found {product_count} total products for '{keyword}'.")
+            
+            # Iterate and evaluate all combined crawled products
+            keyword_deals_count = 0
+            for idx, product in enumerate(keyword_products):
+                discount = product["discount_percentage"]
+                product_key = product.get("id") or product.get("url")
+                store_name = product.get("source", "Unknown Store")
+                
+                # Print periodic progress logs
+                if idx % 10 == 0 or discount >= min_discount:
+                    print(f"   • [{store_name}] [{idx+1:02d}/{product_count:02d}] {product['name'][:30]}... | Price: ₹{product['sale_price']} | MRP: ₹{product['original_price']} | Discount: {discount}%")
                     
-        print(f"   ✨ Category '{keyword}' scan complete. Published {keyword_deals_count} new deals.")
+                # Filter criteria 1: Must be >= DISCOUNT_THRESHOLD discount
+                if discount >= min_discount:
+                    deals_detected_count += 1
+                    
+                    # Filter criteria 2: Duplicate check
+                    if product_key in posted_deals:
+                        print(f"     🛡️ [DUPLICATE FILTERED] '{product['name'][:30]}' (ID/ASIN: {product_key}) has already been sent. Skipping...")
+                        continue
+                    
+                    # Classify the deal
+                    if discount >= 90.0:
+                        category = "MEGA DEAL"
+                    else:
+                        category = "HOT DEAL"
+                        
+                    # Filter criteria 3: Rate Limiting (Max 5 Telegram posts per scan)
+                    if posts_in_this_scan >= max_posts_per_scan:
+                        print(f"     ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
+                        continue
+                    
+                    keyword_deals_count += 1
+                    print(f"     🔥 {category} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
+                    
+                    # Build professional telegram card
+                    deal_message = format_deal_message(product, discount)
+                    deal_message += f"\n🏪 <b>Store:</b> {store_name}"
+                    
+                    # Automatically send deal to Telegram
+                    try:
+                        await send_telegram_message(
+                            bot_client=bot_client,
+                            channel_chat_id=channel_chat_id,
+                            message=deal_message,
+                            image_url=product["image_url"],
+                            is_dry_run=is_dry_run
+                        )
+                        deals_published_count += 1
+                        posts_in_this_scan += 1
+                        
+                        # Record to persistent duplicates database immediately
+                        save_posted_deal(product_key)
+                        posted_deals.add(product_key)
+                        
+                        print(f"     🎉 [TELEGRAM SEND SUCCESS] Published {category} card to Telegram.")
+                        
+                        # Polite random delay after sending Telegram message to avoid rate limits
+                        post_delay = random.uniform(delay_min, delay_max)
+                        print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
+                        await asyncio.sleep(post_delay)
+                    except Exception as e:
+                        print(f"     ❌ [TELEGRAM SEND FAILURE] Failed to send Telegram card: {e}")
+                        
+            print(f"   ✨ Category '{keyword}' scan complete. Published {keyword_deals_count} new deals.")
+            
+        print(f"\n============================================================")
+        print(f"📊 SUMMARY OF WORKFLOW SCAN:")
+        print(f"   • Total Products Checked: {total_products_scraped}")
+        print(f"   • Total Hot Deals Detected (>= {min_discount}%): {deals_detected_count}")
+        if deals_detected_count == 0:
+            print(f"   • ℹ️ Log: No products matching >= {min_discount}% discount were found during this scan.")
+        print(f"   • Successfully Broadcasted This Scan: {posts_in_this_scan}")
+        print(f"   • Cumulative Deals Sent in Session: {deals_published_count}")
+        print(f"============================================================")
         
-    print(f"\n============================================================")
-    print(f"📊 SUMMARY OF WORKFLOW SCAN:")
-    print(f"   • Total Products Checked: {total_products_scraped}")
-    print(f"   • Total Hot Deals Detected (>= {min_discount}%): {deals_detected_count}")
-    print(f"   • Successfully Broadcasted This Scan: {posts_in_this_scan}")
-    print(f"   • Cumulative Deals Sent in Session: {deals_published_count}")
-    print(f"============================================================")
+    except Exception as e:
+        print(f"\n❌ [GLOBAL ERROR] Critical failure inside deal scan handler: {e}")
+        print("Please check your network environment, server connections, or selector status!")
 
 
 # --- MAIN RUNNER & SCHEDULER LOOP ---

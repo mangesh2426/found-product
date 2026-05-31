@@ -26,6 +26,9 @@ import telegram  # Imported from python-telegram-bot
 import config
 import affiliate_manager
 
+def log_event(emoji: str, level: str, msg: str):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {emoji} [{level}] {msg}")
+
 # --- PRODUCTION PORT-BINDING SERVER FOR RENDER (FREE WEB SERVICE TIER HACK) ---
 class HealthCheckHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -79,8 +82,7 @@ def scrape_myntra(keyword: str) -> list:
     query_dashed = keyword.strip().lower().replace(" ", "-")
     url = f"https://www.myntra.com/{query_dashed}"
     
-    print(f"\n📡 Crawling Myntra Search Page for keyword '{keyword}':")
-    print(f"🔗 URL: {url}")
+    log_event("📡", "website scanning", f"[Myntra] Searching keyword '{keyword}'. URL: {url}")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -98,28 +100,28 @@ def scrape_myntra(keyword: str) -> list:
             response = requests.get(url, headers=headers, timeout=12)
             if response.status_code == 200:
                 break
-            print(f"   ⚠️ Myntra returned HTTP {response.status_code}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            log_event("⚠️", "website scanning", f"[Myntra] HTTP {response.status_code}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
             time.sleep(2)
         except requests.exceptions.RequestException as e:
-            print(f"   ⚠️ Myntra request error: {e}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            log_event("⚠️", "website scanning", f"[Myntra] Request error: {e}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
             time.sleep(2)
             
     if not response or response.status_code != 200:
-        print(f"   ❌ Myntra scraping failure after {max_retries} attempts.")
+        log_event("❌", "scraping blocked", f"[Myntra] Scraping blocked or failure after {max_retries} attempts (HTTP {response.status_code if response else 'None'}).")
         return []
         
     try:
         soup = BeautifulSoup(response.content, "lxml")
         match = re.search(r"window\.__myx\s*=\s*(\{.+?\});?\s*(?:window\.__INITIAL_STATE__|</script>|$)", response.text)
         if not match:
-            print("   ❌ Error: Could not locate window.__myx JSON script tag in Myntra page source.")
+            log_event("❌", "selector missing", "[Myntra] Could not locate 'window.__myx' script block in page source.")
             return []
             
         state_data = json.loads(match.group(1))
         search_results = state_data.get("searchData", {}).get("results", {})
         product_list = search_results.get("products", [])
         
-        print(f"   🔎 Myntra: Found {len(product_list)} products in search results.")
+        log_event("🔎", "products found", f"[Myntra] Successfully extracted {len(product_list)} product cards from search state.")
         
         for item in product_list:
             brand = item.get("brand", "")
@@ -156,7 +158,7 @@ def scrape_myntra(keyword: str) -> list:
             
         return products
     except Exception as e:
-        print(f"   ❌ Unexpected Myntra Scraper Error: {e}")
+        log_event("❌", "selector missing", f"[Myntra] Unexpected parsing exception: {e}")
         return []
 
 
@@ -170,8 +172,7 @@ def scrape_flipkart(keyword: str) -> list:
     query = keyword.strip().replace(" ", "+")
     url = f"https://www.flipkart.com/search?q={query}"
     
-    print(f"\n📡 Crawling Flipkart Search Page for keyword '{keyword}':")
-    print(f"🔗 URL: {url}")
+    log_event("📡", "website scanning", f"[Flipkart] Searching keyword '{keyword}'. URL: {url}")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -193,14 +194,14 @@ def scrape_flipkart(keyword: str) -> list:
             response = requests.get(url, headers=headers, timeout=12)
             if response.status_code == 200:
                 break
-            print(f"   ⚠️ Flipkart returned HTTP {response.status_code}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            log_event("⚠️", "website scanning", f"[Flipkart] HTTP {response.status_code}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
             time.sleep(2)
         except requests.exceptions.RequestException as e:
-            print(f"   ⚠️ Flipkart request error: {e}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
+            log_event("⚠️", "website scanning", f"[Flipkart] Request error: {e}. Retrying in 2s (Attempt {attempt+1}/{max_retries})...")
             time.sleep(2)
             
     if not response or response.status_code != 200:
-        print(f"   ❌ Flipkart scraping failure or anti-bot blockade (HTTP {response.status_code if response else 'None'}). Skipping...")
+        log_event("❌", "scraping blocked", f"[Flipkart] Scraping blocked or failure (HTTP {response.status_code if response else 'None'}).")
         return []
         
     try:
@@ -208,7 +209,11 @@ def scrape_flipkart(keyword: str) -> list:
         
         # Resilient selection: div[data-id] represents product cards in search grids
         cards = soup.select("div[data-id]") or soup.select("div._1xHGtK") or soup.select("div._4ddC5M")
-        print(f"   🔎 Flipkart: Found {len(cards)} item cards in search source.")
+        if not cards:
+            log_event("❌", "selector missing", "[Flipkart] Could not locate any product search cards on page (selectors missing).")
+            return []
+            
+        log_event("🔎", "products found", f"[Flipkart] Successfully extracted {len(cards)} item cards from search source.")
         
         for card in cards[:20]:  # Check top 20 items
             info_div = card.select_one("div.p0C73x")
@@ -298,7 +303,7 @@ def scrape_flipkart(keyword: str) -> list:
             
         return products
     except Exception as e:
-        print(f"   ❌ Unexpected Flipkart Scraper Error: {e}")
+        log_event("❌", "selector missing", f"[Flipkart] Unexpected parsing exception: {e}")
         return []
 
 
@@ -312,8 +317,7 @@ def scrape_amazon(keyword: str) -> list:
     query = keyword.strip().replace(" ", "+")
     url = f"https://www.amazon.in/s?k={query}"
     
-    print(f"\n📡 Crawling Amazon India Search Page for keyword '{keyword}':")
-    print(f"🔗 URL: {url}")
+    log_event("📡", "website scanning", f"[Amazon] Searching keyword '{keyword}'. URL: {url}")
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -332,29 +336,33 @@ def scrape_amazon(keyword: str) -> list:
             if response.status_code == 200:
                 # Double check for Amazon robot check page / CAPTCHA
                 if "api-services-support@amazon.com" in response.text or "captcha" in response.text.lower() or "robot check" in response.text.lower():
-                    print(f"   ⚠️ Amazon served a CAPTCHA challenge (Attempt {attempt+1}/{max_retries}). Retrying with sleep...")
+                    log_event("⚠️", "website scanning", f"[Amazon] Served a CAPTCHA challenge (Attempt {attempt+1}/{max_retries}). Retrying in 3s...")
                     time.sleep(3)
                     continue
                 break
-            print(f"   ⚠️ Amazon returned HTTP {response.status_code} (Attempt {attempt+1}/{max_retries})...")
+            log_event("⚠️", "website scanning", f"[Amazon] HTTP {response.status_code} (Attempt {attempt+1}/{max_retries}). Retrying in 3s...")
             time.sleep(3)
         except requests.exceptions.RequestException as e:
-            print(f"   ⚠️ Amazon request error: {e} (Attempt {attempt+1}/{max_retries})...")
+            log_event("⚠️", "website scanning", f"[Amazon] Request error: {e} (Attempt {attempt+1}/{max_retries}). Retrying in 3s...")
             time.sleep(3)
             
     if not response or response.status_code != 200:
-        print(f"   ❌ Amazon scraping failure or anti-bot blockade (HTTP {response.status_code if response else 'None'}). Skipping...")
+        log_event("❌", "scraping blocked", f"[Amazon] Scraping failure or blocked (HTTP {response.status_code if response else 'None'}).")
         return []
         
     # Final check for captcha pages
     if "api-services-support@amazon.com" in response.text or "captcha" in response.text.lower() or "robot check" in response.text.lower():
-        print("   ⚠️ [Amazon] CAPTCHA / Robot Check blockade confirmed. Skipping Amazon in this cycle.")
+        log_event("❌", "scraping blocked", "[Amazon] CAPTCHA / Robot Check blockade confirmed. Skipping Amazon in this cycle.")
         return []
         
     try:
         soup = BeautifulSoup(response.content, "lxml")
         cards = soup.select('div[data-component-type="s-search-result"]')
-        print(f"   🔎 Amazon: Found {len(cards)} item cards in search source.")
+        if not cards:
+            log_event("❌", "selector missing", "[Amazon] Could not locate any product search cards on page (selectors missing).")
+            return []
+            
+        log_event("🔎", "products found", f"[Amazon] Successfully extracted {len(cards)} item cards from search source.")
         
         for card in cards[:20]:  # Check top 20 items
             asin = card.get("data-asin") or ""
@@ -410,7 +418,7 @@ def scrape_amazon(keyword: str) -> list:
             
         return products
     except Exception as e:
-        print(f"   ❌ Unexpected Amazon Scraper Error: {e}")
+        log_event("❌", "selector missing", f"[Amazon] Unexpected parsing exception: {e}")
         return []
 
 
@@ -595,10 +603,8 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
         delay_min = getattr(config, "REQUEST_DELAY_MIN", 3.0)
         delay_max = getattr(config, "REQUEST_DELAY_MAX", 8.0)
         
-        print(f"\n============================================================")
-        print(f"🔄 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting live multi-site deal scan...")
-        print(f"📊 Settings: Category-specific thresholds | Rate Limit: {max_posts_per_scan} posts/scan")
-        print(f"============================================================")
+        log_event("🔄", "crawler started", "Starting live multi-site deal scan...")
+        log_event("📊", "config info", f"Settings: Category thresholds | Rate Limit: {max_posts_per_scan} posts/scan")
         
         total_products_scraped = 0
         deals_detected_count = 0
@@ -609,23 +615,23 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
         
         for i, (keyword, category_name) in enumerate(config.KEYWORDS_WITH_CATEGORIES):
             min_discount = config.THRESHOLDS.get(category_name, 50.0)
-            print(f"\n🔍 [Category {i+1}/{len(config.KEYWORDS_WITH_CATEGORIES)}] Searching for: '{keyword.upper()}' ({category_name}) | Threshold: {min_discount}%")
+            log_event("🔍", "category started", f"Searching for: '{keyword.upper()}' ({category_name}) | Threshold: {min_discount}%")
             
             keyword_products = []
             
             # --- Store 1: Myntra ---
             myntra_items = []
             for attempt in range(max_scrape_retries):
-                print(f"   📡 [Myntra Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+                log_event("📡", "website scanning", f"[Myntra] keyword: '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})")
                 try:
                     myntra_items = scrape_myntra(keyword)
                     if myntra_items:
-                        print(f"      ✅ Myntra SUCCESS: Found {len(myntra_items)} products.")
+                        log_event("🔎", "products found", f"[Myntra] Successfully extracted {len(myntra_items)} products.")
                         break
                     else:
-                        print(f"      ⚠️ Myntra returned 0 products. Retrying after delay...")
+                        log_event("⚠️", "scraping warning", "[Myntra] Scraping returned 0 products. Retrying after delay...")
                 except Exception as e:
-                    print(f"      ❌ Myntra scraping attempt error: {e}")
+                    log_event("❌", "scraping error", f"[Myntra] Scraping attempt error: {e}")
                 if attempt < max_scrape_retries - 1:
                     await asyncio.sleep(2)
             keyword_products.extend(myntra_items)
@@ -633,37 +639,26 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
             # --- Store 2: Flipkart ---
             flipkart_items = []
             for attempt in range(max_scrape_retries):
-                print(f"   📡 [Flipkart Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+                log_event("📡", "website scanning", f"[Flipkart] keyword: '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})")
                 try:
                     flipkart_items = scrape_flipkart(keyword)
                     if flipkart_items:
-                        print(f"      ✅ Flipkart SUCCESS: Found {len(flipkart_items)} products.")
+                        log_event("🔎", "products found", f"[Flipkart] Successfully extracted {len(flipkart_items)} products.")
                         break
+                    else:
+                        log_event("⚠️", "scraping warning", "[Flipkart] Scraping returned 0 products. Retrying...")
                 except Exception as e:
-                    print(f"      ❌ Flipkart scraping attempt error: {e}")
+                    log_event("❌", "scraping error", f"[Flipkart] Scraping attempt error: {e}")
             keyword_products.extend(flipkart_items)
-            
-            # --- Store 3: Amazon India (Disabled for Free-Tier Web Service lightweight scan) ---
-            # amazon_items = []
-            # for attempt in range(max_scrape_retries):
-            #     print(f"   📡 [Amazon Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
-            #     try:
-            #         amazon_items = scrape_amazon(keyword)
-            #         if amazon_items:
-            #             print(f"      ✅ Amazon SUCCESS: Found {len(amazon_items)} products.")
-            #             break
-            #     except Exception as e:
-            #         print(f"      ❌ Amazon scraping attempt error: {e}")
-            # keyword_products.extend(amazon_items)
             
             product_count = len(keyword_products)
             total_products_scraped += product_count
             
             if not keyword_products:
-                print(f"⚠️ Scraping returned 0 items from all stores for keyword: '{keyword}'")
+                log_event("⚠️", "no deals found", f"Scraping returned 0 items from all stores for keyword: '{keyword}'")
                 continue
                 
-            print(f"   🚀 Aggregated SUCCESS! Found {product_count} total products for '{keyword}'.")
+            log_event("🚀", "scrape completed", f"Aggregated SUCCESS! Found {product_count} total products for '{keyword}'.")
             
             # Iterate and evaluate all combined crawled products
             keyword_deals_count = 0
@@ -678,7 +673,7 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                 
                 # Print periodic progress logs
                 if idx % 10 == 0 or discount >= config.DISCOUNT_THRESHOLD:
-                    print(f"   • [{store_name}] [{idx+1:02d}/{product_count:02d}] {product['name'][:30]}... | Price: ₹{product['sale_price']} | MRP: ₹{product['original_price']} | Discount: {discount}%")
+                    log_event("📊", "PROGRESS", f"[{store_name}] [{idx+1:02d}/{product_count:02d}] {product['name'][:30]}... | Price: ₹{product['sale_price']} | MRP: ₹{product['original_price']} | Discount: {discount}%")
                 
                 # Production-safe Quality Filters Check
                 is_quality_ok = True
@@ -699,7 +694,7 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     
                 if not is_quality_ok:
                     # Log low quality skipped as requested
-                    print(f"     ⚠️ [Log] low quality skipped: '{title[:30]}' from {store_name}. Reason: {low_quality_reason}")
+                    log_event("⚠️", "low quality skipped", f"'{title[:30]}' from {store_name}. Reason: {low_quality_reason}")
                     continue
                     
                 deals_detected_count += 1
@@ -707,7 +702,7 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                 # Duplicate Check
                 if product_key in posted_deals:
                     # Log duplicate skipped as requested
-                    print(f"     🛡️ [Log] duplicate skipped: '{title[:30]}' (ID/URL: {product_key}) has already been sent. Skipping...")
+                    log_event("🛡️", "duplicate skipped", f"'{title[:30]}' (ID/URL: {product_key}) has already been sent. Skipping...")
                     continue
                 
                 # Classify the deal
@@ -718,14 +713,14 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     
                 # Rate Limiting (Max 3 Telegram posts per scan)
                 if posts_in_this_scan >= max_posts_per_scan:
-                    print(f"     ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
+                    log_event("⚠️", "RATE_LIMIT", f"Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
                     continue
                 
                 keyword_deals_count += 1
-                print(f"     🔥 {deal_type} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
+                log_event("🔥", "high discount detected", f"[{store_name}] {product['name'][:35]} has a {discount}% discount!")
                 
                 # Log "product found" as requested
-                print(f"     📢 [Log] product found: '{product['name']}' from {store_name} ({discount}% off)")
+                log_event("📢", "product found", f"'{product['name']}' from {store_name} ({discount}% off)")
                 
                 affiliate_success = False
                 affiliate_url = product["url"]
@@ -736,13 +731,13 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                         max_gens = getattr(config, "MAX_AFFILIATE_GENERATIONS_PER_SCAN", 3)
                         if affiliate_generations_in_scan < max_gens:
                             # Log "affiliate generation started" as requested
-                            print(f"     🔗 [Log] affiliate generation started for URL: {product['url']}")
+                            log_event("🔗", "affiliate generation started", f"for URL: {product['url']}")
                             try:
                                 converted_url = await affiliate_manager.generate_affiliate_link(product["url"])
                                 
                                 # Added delay between affiliate generations: 20 to 40 seconds
                                 post_generation_delay = random.uniform(20, 40)
-                                print(f"     ⏳ Delay active between affiliate generations: Waiting {post_generation_delay:.2f} seconds...")
+                                log_event("⏳", "DELAY", f"Delay active between affiliate generations: Waiting {post_generation_delay:.2f} seconds...")
                                 await asyncio.sleep(post_generation_delay)
                                 
                                 if converted_url and converted_url != product["url"]:
@@ -750,23 +745,23 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                                     affiliate_success = True
                                     affiliate_generations_in_scan += 1
                                     # Log "affiliate link generated" as requested
-                                    print(f"     ✅ [Log] affiliate link generated successfully: {converted_url}")
+                                    log_event("✅", "affiliate link generated successfully", f"{converted_url}")
                                 else:
-                                    print("     ⚠️ [Affiliate Automation] Link conversion returned original link (no changes).")
+                                    log_event("⚠️", "AFFILIATE_WARN", "Link conversion returned original link (no changes).")
                             except Exception as aff_err:
                                 # Log error as requested
-                                print(f"     ❌ [Log] Error: Affiliate generation failed: {aff_err}")
+                                log_event("❌", "Playwright failure", f"Affiliate generation failed: {aff_err}")
                         else:
-                            print(f"     ⚠️ [Affiliate Automation] Maximum affiliate generations per scan reached ({max_gens}/{max_gens}).")
+                            log_event("⚠️", "AFFILIATE_LIMIT", f"Maximum affiliate generations per scan reached ({max_gens}/{max_gens}).")
                     else:
-                        print(f"     ℹ️ [Affiliate Automation] Skipping conversion: Source '{product.get('source')}' is not Myntra.")
+                        log_event("ℹ️", "AFFILIATE_SKIP", f"Skipping conversion: Source '{product.get('source')}' is not Myntra.")
                 else:
-                    print("     ℹ️ [Affiliate Automation] Affiliate links are disabled or not configured.")
+                    log_event("ℹ️", "AFFILIATE_DISABLED", "Affiliate links are disabled or not configured.")
                     
                 # Handle failure/fallback or skip posting based on config
                 if config.USE_AFFILIATE_LINKS and product.get("source") == "Myntra" and not affiliate_success:
                     # Log affiliate generation failure as requested & skip posting
-                    print(f"     ❌ [Log] affiliate generation failed for URL: {product['url']}. Skipping deal posting.")
+                    log_event("❌", "affiliate generation failed", f"for URL: {product['url']}. Skipping deal posting.")
                     continue
                 else:
                     # Update URL to the converted affiliate URL or original
@@ -793,26 +788,23 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     posted_deals.add(product_key)
                     
                     # Log "Telegram post sent" as requested
-                    print(f"     🎉 [Log] Telegram post sent successfully.")
+                    log_event("🎉", "Telegram post sent successfully", f"to channel {channel_chat_id}")
                     
                     # Polite random delay after sending Telegram message to avoid rate limits
                     post_delay = random.uniform(delay_min, delay_max)
-                    print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
+                    log_event("⏳", "TELEGRAM_DELAY", f"Waiting {post_delay:.2f} seconds before continuing...")
                     await asyncio.sleep(post_delay)
                 except Exception as e:
                     # Log Telegram post failure as requested
-                    print(f"     ❌ [Log] Telegram post sent failed: {e}")
+                    log_event("❌", "Telegram post sent failed", f"{e}")
                         
-            print(f"   ✨ Category '{keyword}' scan complete. Published {keyword_deals_count} new deals.")
+            log_event("✨", "CATEGORY_COMPLETE", f"Category '{keyword}' scan complete. Published {keyword_deals_count} new deals.")
             
-        print(f"\n============================================================")
-        print(f"📊 SUMMARY OF WORKFLOW SCAN:")
-        print(f"   • Total Products Checked: {total_products_scraped}")
-        print(f"   • Total Hot Deals Detected: {deals_detected_count}")
-        if deals_detected_count == 0:
-            print(f"   • ℹ️ Log: No products matching the category discount thresholds were found during this scan.")
-        print(f"   • Successfully Broadcasted This Scan: {posts_in_this_scan}")
-        print(f"   • Cumulative Deals Sent in Session: {deals_published_count}")
+        log_event("📊", "SCAN_SUMMARY", "--- FINAL SCAN SUMMARY ---")
+        log_event("📈", "total products scanned", f"{total_products_scraped}")
+        log_event("🎯", "total qualifying deals", f"{deals_detected_count}")
+        log_event("🔗", "total affiliate links generated", f"{affiliate_generations_in_scan}")
+        log_event("🎉", "total Telegram posts sent", f"{posts_in_this_scan}")
         print(f"============================================================")
         
     except Exception as e:
@@ -823,16 +815,14 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
 # --- MAIN RUNNER & SCHEDULER LOOP ---
 
 async def main():
-    print("=" * 60)
-    print("🤖 TELEGRAM DEAL AUTOMATION BOT INITIALIZED 🤖")
-    print("⚙️ MODE: Render Free Web Service (Lightweight Daemon)")
-    print("=" * 60)
+    log_event("🤖", "bot startup", "Deal Automation Bot initialized successfully.")
+    log_event("⚙️", "bot startup", "MODE: Render Free Web Service (Lightweight Daemon)")
     
     # Recreate the EarnKaro session file dynamically if available in environment variables (Render/Cloud support)
     affiliate_manager.restore_session_from_env()
     
     # Start Render Free Web Service port-binding health server in the background
-    print("📡 Launching background TCP port-binding server for Render health checks...")
+    log_event("📡", "port binder", "Launching background TCP port-binding server for Render health checks...")
     threading.Thread(target=run_health_server, daemon=True).start()
     
     # Check if credentials are configured
@@ -843,13 +833,13 @@ async def main():
     public_channel = None
     
     if is_live_ready:
-        print("🟢 STATUS: Credentials configured! Starting in LIVE mode.")
+        log_event("🟢", "config status", "Credentials configured! Starting in LIVE mode.")
         bot_client = telegram.Bot(token=config.BOT_TOKEN)
         private_channel = config.PRIVATE_REVIEW_CHANNEL
         public_channel = config.PUBLIC_DEALS_CHANNEL
         
         # Automatically send a startup connection test message to the private review channel
-        print(f"📨 Sending test connection message to Private Review Channel ({private_channel})...")
+        log_event("📨", "telegram", f"Sending test connection message to Private Review Channel ({private_channel})...")
         try:
             startup_test_msg = (
                 "🤖 <b>Bot Connection Successful!</b>\n\n"
@@ -861,18 +851,16 @@ async def main():
                 text=startup_test_msg,
                 parse_mode="HTML"
             )
-            print("✅ Test connection message sent successfully!")
+            log_event("✅", "telegram", "Test connection message sent successfully!")
         except Exception as e:
-            print(f"❌ Failed to send startup message: {e}")
-            print("Please double check that:")
-            print("1. Your Bot Token is correct.")
-            print(f"2. The bot is added as an Administrator to your Private Channel: {private_channel}.")
-            print("Switching back to Dry-Run mode to prevent program crash...\n")
+            log_event("❌", "Telegram failure", f"Failed to send startup message: {e}")
+            log_event("⚠️", "Telegram warning", "Please verify your token is correct and bot is added as Admin.")
+            log_event("⚠️", "Telegram warning", "Switching back to Dry-Run mode to prevent program crash...\n")
             is_live_ready = False
             
     if not is_live_ready:
-        print("🟡 STATUS: RUNNING IN 'DRY-RUN DEMO MODE'")
-        print("This allows you to see how the bot behaves without needing actual Telegram tokens!")
+        log_event("🟡", "config status", "RUNNING IN 'DRY-RUN DEMO MODE'")
+        log_event("ℹ️", "config status", "This allows you to see how the bot behaves without needing actual Telegram tokens!")
         config.print_configuration_help()
         bot_client = None
         private_channel = None
@@ -882,12 +870,12 @@ async def main():
     scan_interval = getattr(config, "SCAN_INTERVAL", 5)
     interval_seconds = scan_interval * 60
     
-    print(f"\n🔄 Scheduler active. Running deal scanning loop every {scan_interval} minutes.")
+    log_event("🔄", "scheduler", f"Scheduler active. Running deal scanning loop every {scan_interval} minutes.")
     
     try:
         while True:
             scan_start = datetime.now()
-            print(f"\n⏰ [{scan_start.strftime('%Y-%m-%d %H:%M:%S')}] --- SCAN CYCLE STARTED ---")
+            log_event("⏰", "scan started", "--- SCAN CYCLE STARTED ---")
             
             # Run the deal finder logic
             await scan_for_deals(bot_client, private_channel, is_dry_run=(not is_live_ready))
@@ -896,18 +884,17 @@ async def main():
             duration = scan_end - scan_start
             next_run = scan_end + timedelta(seconds=interval_seconds)
             
-            print(f"\n⏰ [{scan_end.strftime('%Y-%m-%d %H:%M:%S')}] --- SCAN CYCLE COMPLETED ---")
-            print(f"⏱️ Cycle Duration: {duration.total_seconds():.2f} seconds")
-            print(f"⏳ Sleeping for {scan_interval} minutes.")
-            print(f"📅 Next scheduled scan cycle at: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"Press Ctrl+C to stop the bot...")
+            log_event("⏰", "scan completed", f"Cycle completed. Duration: {duration.total_seconds():.2f} seconds.")
+            log_event("⏳", "scheduler", f"Sleeping for {scan_interval} minutes.")
+            log_event("📅", "scheduler", f"Next scheduled scan cycle at: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+            log_event("ℹ️", "scheduler", "Press Ctrl+C to stop the bot...")
             
             await asyncio.sleep(interval_seconds)
             
     except KeyboardInterrupt:
-        print("\n🛑 Bot stopped manually by user. Goodbye!")
+        log_event("🛑", "scheduler", "Bot stopped manually by user. Goodbye!")
     except Exception as e:
-        print(f"\n⚠️ Unexpected loop error encountered: {e}")
+        log_event("❌", "scheduler", f"Unexpected loop error encountered: {e}")
 
 if __name__ == "__main__":
     # Ensure correct asyncio loop execution across platforms

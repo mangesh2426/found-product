@@ -3,10 +3,14 @@ import asyncio
 import random
 import base64
 import json
+from datetime import datetime
 from playwright.async_api import async_playwright
 import config
 
 SESSION_FILE = "earnkaro_session.json"
+
+def log_session(emoji: str, level: str, msg: str):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {emoji} [{level}] {msg}")
 
 def restore_session_from_env() -> bool:
     """
@@ -17,10 +21,10 @@ def restore_session_from_env() -> bool:
     """
     b64_data = os.getenv("EARNKARO_SESSION_BASE64")
     if not b64_data:
-        print("ℹ️ EarnKaro: No 'EARNKARO_SESSION_BASE64' environment variable found. Reusing local session file if exists.")
+        log_session("ℹ️", "session restore failure", "No 'EARNKARO_SESSION_BASE64' environment variable found. Reusing local session file if exists.")
         return False
         
-    print("📡 [Log] EarnKaro session restoration started...")
+    log_session("📡", "session restore success", "EarnKaro session restoration started...")
     try:
         # Clean any whitespace or formatting from the base64 string
         clean_b64 = "".join(b64_data.split())
@@ -37,16 +41,14 @@ def restore_session_from_env() -> bool:
             f.write(decoded_str)
             
         # Log session restored successfully
-        print(f"✅ [Log] EarnKaro session restored successfully! Recreated '{SESSION_FILE}' file.")
+        log_session("✅", "session restore success", f"EarnKaro session restored successfully! Recreated '{SESSION_FILE}' file.")
         return True
     except base64.binascii.Error as e:
-        # Log invalid Base64
-        print(f"❌ [Log] Error: EarnKaro session restoration failed. Invalid Base64: {e}")
+        log_session("❌", "session restore failure", f"Invalid Base64 format: {e}")
     except json.JSONDecodeError as e:
-        print(f"❌ [Log] Error: EarnKaro session restoration failed. Decoded text is not a valid JSON structure: {e}")
+        log_session("❌", "session restore failure", f"Decoded text is not a valid JSON structure: {e}")
     except Exception as e:
-        # Log session recreation failed
-        print(f"❌ [Log] Error: EarnKaro session recreation failed: {e}")
+        log_session("❌", "session restore failure", f"Session recreation failed: {e}")
     return False
 
 async def get_affiliate_link(product_url: str) -> str:
@@ -60,26 +62,29 @@ async def get_affiliate_link(product_url: str) -> str:
     Falls back gracefully to product_url if any failure occurs.
     """
     if not config.is_earnkaro_configured():
-        print("⚠️ EarnKaro: Credentials not configured in .env. Falling back to original URL.")
+        log_session("⚠️", "session restore failure", "EarnKaro credentials not configured in .env. Falling back to original URL.")
         return product_url
 
     # Check if saved OTP session file exists
     if not os.path.exists(SESSION_FILE):
-        print(f"⚠️ EarnKaro: '{SESSION_FILE}' not found!")
-        print("   👉 To activate automated affiliate links, please run this setup command in your terminal first:")
-        print("      venv\\Scripts\\python login_earnkaro.py")
-        print("   Falling back to original product URL.")
+        log_session("❌", "session restore failure", f"'{SESSION_FILE}' not found! Falling back to original product URL.")
+        log_session("👉", "session restore info", "To activate automated affiliate links, please run this setup command locally first:")
+        log_session("👉", "session restore info", "   python login_earnkaro.py")
         return product_url
 
-    print(f"\n📡 EarnKaro Automation: Attempting session-based conversion for: '{product_url}'")
+    log_session("🔗", "affiliate generation started", f"Attempting session-based conversion for: '{product_url}'")
     
     async with async_playwright() as p:
-        # Launch Chromium browser
-        browser = await p.chromium.launch(headless=True)
+        try:
+            log_session("🤖", "Playwright active", "Launching headless browser context...")
+            browser = await p.chromium.launch(headless=True)
+        except Exception as launch_err:
+            log_session("❌", "Playwright failure", f"Failed to launch Playwright browser: {launch_err}")
+            return product_url
         
         try:
             # Create a context loading the saved storage state (cookies, localStorage)
-            print(f"💾 EarnKaro: Loading saved session from '{SESSION_FILE}'...")
+            log_session("💾", "session restore success", f"Loading saved session state from '{SESSION_FILE}'...")
             context = await browser.new_context(
                 storage_state=SESSION_FILE,
                 viewport={"width": 1280, "height": 800},
@@ -89,15 +94,14 @@ async def get_affiliate_link(product_url: str) -> str:
             page = await context.new_page()
             
             # Step 1: Navigating directly to Make Links page
-            print("🔗 EarnKaro: Navigating directly to Make Links page...")
+            log_session("📡", "website scanning", "Navigating directly to EarnKaro 'Make Links' page...")
             await page.goto("https://earnkaro.com/create-earn-link", timeout=30000, wait_until="load")
             await asyncio.sleep(random.uniform(1.5, 3.0))
             
             # Step 2: Session Validation (check if redirected to login)
             if "/login" in page.url:
-                print("⚠️ EarnKaro: Saved session has EXPIRED or is invalid!")
-                print("   👉 Please refresh your OTP login session by running this command in your terminal:")
-                print("      venv\\Scripts\\python login_earnkaro.py")
+                log_session("❌", "EarnKaro session expired", "Persisted EarnKaro OTP session is expired or invalid!")
+                log_session("👉", "session restore info", "Please refresh your login session by running 'python login_earnkaro.py' locally.")
                 raise Exception("Persisted OTP session expired.")
                 
             # Step 3: Input the product URL in the textarea
@@ -117,6 +121,7 @@ async def get_affiliate_link(product_url: str) -> str:
                     break
                     
             if not textarea:
+                log_session("❌", "selector missing", "Could not locate the 'Make Links' input textarea/input field.")
                 raise Exception("Could not locate the 'Make Links' input textarea/input field.")
                 
             await textarea.click()
@@ -141,18 +146,19 @@ async def get_affiliate_link(product_url: str) -> str:
                     break
                     
             if not convert_btn:
+                log_session("❌", "selector missing", "Could not locate the 'Make Profit Link' conversion button.")
                 raise Exception("Could not locate the 'Make Profit Link' conversion button.")
                 
-            print("🔗 EarnKaro: Clicking conversion button...")
+            log_session("🔗", "affiliate generation started", "Clicking the 'Make Profit Link' conversion button...")
             await convert_btn.click()
             
             # Step 5: Wait for generated profit link
-            print("🔗 EarnKaro: Waiting for profit link generation...")
+            log_session("⏳", "affiliate generation started", "Waiting for profit link generation to complete...")
             
             generated_link = None
             # Wait for input#deallinkshorturl to be visible and have a value
             try:
-                # Wait for up to 10 seconds for the element to appear and be loaded
+                # Wait for up to 12 seconds for the element to appear and be loaded
                 await page.wait_for_selector("input#deallinkshorturl", state="visible", timeout=12000)
                 
                 # Poll for up to 10 seconds for a non-empty value in the input
@@ -163,7 +169,7 @@ async def get_affiliate_link(product_url: str) -> str:
                         break
                     await page.wait_for_timeout(500)
             except Exception as e:
-                print(f"⚠️ EarnKaro: Direct selector wait failed: {e}. Trying generic fallbacks...")
+                log_session("⚠️", "selector missing", f"Direct selector wait for 'input#deallinkshorturl' failed: {e}. Trying generic fallbacks...")
                 
             # Generic fallbacks if direct ID check fails
             if not generated_link:
@@ -186,14 +192,18 @@ async def get_affiliate_link(product_url: str) -> str:
                         break
                         
             if not generated_link:
+                log_session("❌", "selector missing", "Affiliate link generation timed out or link selector is missing.")
                 raise Exception("Affiliate link generation timed out or selectors failed.")
                 
-            print(f"🎉 EarnKaro SUCCESS: Successfully converted to affiliate link: '{generated_link}'")
+            log_session("✅", "affiliate link generated", f"Successfully converted to affiliate link: '{generated_link}'")
             return generated_link
             
         except Exception as e:
-            print(f"❌ EarnKaro Error: Link generation failed: {e}")
-            print("⚠️ Falling back to original product URL.")
+            if "Persisted OTP session expired" in str(e):
+                log_session("❌", "EarnKaro session expired", "EarnKaro session expired. Skipping affiliate generation.")
+            else:
+                log_session("❌", "Playwright failure", f"EarnKaro affiliate automation failed: {e}")
+            log_session("⚠️", "affiliate generation failed", f"Falling back to original product URL: {product_url}")
             return product_url
         finally:
             await browser.close()

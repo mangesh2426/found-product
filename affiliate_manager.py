@@ -1,10 +1,53 @@
 import os
 import asyncio
 import random
+import base64
+import json
 from playwright.async_api import async_playwright
 import config
 
 SESSION_FILE = "earnkaro_session.json"
+
+def restore_session_from_env() -> bool:
+    """
+    Reads the base64-encoded session state from the EARNKARO_SESSION_BASE64
+    environment variable and recreates earnkaro_session.json automatically on startup.
+    This allows running Playwright with a persistent OTP session on cloud platforms
+    like Render without checking the session file into GitHub.
+    """
+    b64_data = os.getenv("EARNKARO_SESSION_BASE64")
+    if not b64_data:
+        print("ℹ️ EarnKaro: No 'EARNKARO_SESSION_BASE64' environment variable found. Reusing local session file if exists.")
+        return False
+        
+    print("📡 [Log] EarnKaro session restoration started...")
+    try:
+        # Clean any whitespace or formatting from the base64 string
+        clean_b64 = "".join(b64_data.split())
+        
+        # Decode the base64 data to bytes, then string
+        decoded_bytes = base64.b64decode(clean_b64)
+        decoded_str = decoded_bytes.decode("utf-8")
+        
+        # Verify it's a valid JSON block
+        json.loads(decoded_str)
+        
+        # Write the decoded JSON back to earnkaro_session.json
+        with open(SESSION_FILE, "w", encoding="utf-8") as f:
+            f.write(decoded_str)
+            
+        # Log session restored successfully
+        print(f"✅ [Log] EarnKaro session restored successfully! Recreated '{SESSION_FILE}' file.")
+        return True
+    except base64.binascii.Error as e:
+        # Log invalid Base64
+        print(f"❌ [Log] Error: EarnKaro session restoration failed. Invalid Base64: {e}")
+    except json.JSONDecodeError as e:
+        print(f"❌ [Log] Error: EarnKaro session restoration failed. Decoded text is not a valid JSON structure: {e}")
+    except Exception as e:
+        # Log session recreation failed
+        print(f"❌ [Log] Error: EarnKaro session recreation failed: {e}")
+    return False
 
 async def get_affiliate_link(product_url: str) -> str:
     """

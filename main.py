@@ -828,6 +828,9 @@ async def main():
     print("⚙️ MODE: Render Free Web Service (Lightweight Daemon)")
     print("=" * 60)
     
+    # Recreate the EarnKaro session file dynamically if available in environment variables (Render/Cloud support)
+    affiliate_manager.restore_session_from_env()
+    
     # Start Render Free Web Service port-binding health server in the background
     print("📡 Launching background TCP port-binding server for Render health checks...")
     threading.Thread(target=run_health_server, daemon=True).start()

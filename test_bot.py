@@ -7,7 +7,33 @@ import telegram
 load_dotenv()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME")
+PUBLIC_CHANNEL = os.getenv("TELEGRAM_CHANNEL_USERNAME") or os.getenv("TELEGRAM_PUBLIC_DEALS_CHANNEL")
+PRIVATE_CHANNEL = os.getenv("TELEGRAM_PRIVATE_REVIEW_CHANNEL")
+
+async def test_channel(bot, channel_name, channel_id):
+    print(f"\n📨 Sending test message to {channel_name} ({channel_id})...")
+    test_message = (
+        f"🤖 <b>Bot Connection Test - {channel_name}</b>\n\n"
+        f"This is a test message from your bot to verify that the credentials and channel admin permissions are correct!"
+    )
+    try:
+        sent_message = await bot.send_message(
+            chat_id=channel_id,
+            text=test_message,
+            parse_mode="HTML"
+        )
+        print(f"🎉 SUCCESS! The message was sent successfully to {channel_name}.")
+        print(f"💬 Message ID: {sent_message.message_id}")
+        return True
+    except telegram.error.BadRequest as e:
+        print(f"❌ Error: Bad Request - {e}")
+        print("   This usually means one of two things:")
+        print(f"   1. The channel username '{channel_id}' is incorrect or does not exist.")
+        print("   2. The bot is NOT an Administrator of the channel.")
+        print("      👉 FIX: Go to your Telegram Channel -> Manage Channel -> Administrators -> Add Administrator -> Search for your bot username -> Save.")
+    except Exception as e:
+        print(f"❌ Unexpected Error for {channel_name}: {e}")
+    return False
 
 async def main():
     print("=" * 60)
@@ -19,24 +45,29 @@ async def main():
         print("❌ Error: TELEGRAM_BOT_TOKEN is not configured in .env file!")
         return
         
-    if not CHANNEL_USERNAME or CHANNEL_USERNAME == "@YOUR_CHANNEL_USERNAME_HERE":
-        print("❌ Error: TELEGRAM_CHANNEL_USERNAME is not configured in .env file!")
-        return
-
-    # 2. Clean the token of any unexpected spaces
     token = BOT_TOKEN.strip()
     if " " in token:
         print("⚠️  Warning: Your TELEGRAM_BOT_TOKEN contains a space character in .env:")
         print(f"    '{BOT_TOKEN}'")
-        print("    Telegram tokens never contain spaces. We will automatically clean it for this test,")
-        print("    but you should open your .env file and remove the space.")
         token = token.replace(" ", "")
         
     # Mask token for security in terminal display
     masked_token = f"{token[:10]}...{token[-5:]}" if len(token) > 15 else token
     print(f"🤖 Bot Token Loaded: {masked_token}")
-    print(f"📢 Channel Username Loaded: {CHANNEL_USERNAME}")
-    print("\nAttempting to connect to Telegram and send a message...")
+    
+    channels_to_test = []
+    if PUBLIC_CHANNEL and PUBLIC_CHANNEL not in ["@YOUR_CHANNEL_USERNAME_HERE", "@YOUR_PUBLIC_CHANNEL_HERE"]:
+        channels_to_test.append(("Public Deals Channel", PUBLIC_CHANNEL))
+    if PRIVATE_CHANNEL and PRIVATE_CHANNEL not in ["@YOUR_PRIVATE_CHANNEL_HERE"]:
+        channels_to_test.append(("Private Review Channel", PRIVATE_CHANNEL))
+        
+    if not channels_to_test:
+        print("❌ Error: No valid Telegram channels configured in .env file!")
+        print("   Please configure TELEGRAM_PUBLIC_DEALS_CHANNEL or TELEGRAM_PRIVATE_REVIEW_CHANNEL.")
+        return
+        
+    print(f"📢 Configured channels to test: {', '.join([c[1] for c in channels_to_test])}")
+    print("\nAttempting to connect to Telegram...")
     
     try:
         # Initialize the bot client
@@ -48,38 +79,18 @@ async def main():
         print(f"🤖 Bot Name: {bot_info.first_name}")
         print(f"🤖 Bot Username: @{bot_info.username}")
         
-        # Send a test message
-        test_message = (
-            "🤖 <b>Bot Connection Test</b>\n\n"
-            "This is a test message from your bot to verify that the credentials and channel admin permissions are correct!"
-        )
-        
-        print(f"📨 Sending test message to {CHANNEL_USERNAME}...")
-        sent_message = await bot.send_message(
-            chat_id=CHANNEL_USERNAME,
-            text=test_message,
-            parse_mode="HTML"
-        )
-        
-        print("🎉 SUCCESS! The message was sent successfully to your channel.")
-        print(f"💬 Message ID: {sent_message.message_id}")
-        
+        # Test each configured channel
+        for name, channel_id in channels_to_test:
+            await test_channel(bot, name, channel_id)
+            
     except telegram.error.InvalidToken:
         print("❌ Error: The Telegram Bot Token is invalid!")
         print("   Please check your .env file and ensure the token is correct.")
-        
-    except telegram.error.BadRequest as e:
-        print(f"❌ Error: Bad Request - {e}")
-        print("   This usually means one of two things:")
-        print(f"   1. The channel username '{CHANNEL_USERNAME}' is incorrect or does not exist.")
-        print("   2. The bot is NOT an Administrator of the channel.")
-        print("      👉 FIX: Go to your Telegram Channel -> Manage Channel -> Administrators -> Add Administrator -> Search for your bot username -> Save.")
-        
     except Exception as e:
-        print(f"❌ Unexpected Error: {e}")
+        print(f"❌ Connection/Setup Error: {e}")
         print("   Check your internet connection and try again.")
         
-    print("=" * 60)
+    print("\n" + "=" * 60)
 
 if __name__ == "__main__":
     # Ensure correct asyncio execution

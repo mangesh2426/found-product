@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Load env variables for the Telegram bot
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME")
+CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME") or os.getenv("TELEGRAM_PUBLIC_DEALS_CHANNEL") or os.getenv("TELEGRAM_PRIVATE_REVIEW_CHANNEL")
 
 # Import our helper formatter function from main.py to keep the code modular and clean!
 from main import format_deal_message

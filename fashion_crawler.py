@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load Telegram configuration
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME")
+CHANNEL_USERNAME = os.getenv("TELEGRAM_CHANNEL_USERNAME") or os.getenv("TELEGRAM_PUBLIC_DEALS_CHANNEL") or os.getenv("TELEGRAM_PRIVATE_REVIEW_CHANNEL")
 
 # Import settings and helper modules from main.py and config.py to keep everything clean and modular!
 import config

@@ -24,6 +24,7 @@ import telegram  # Imported from python-telegram-bot
 
 # Import local configuration and safety checks
 import config
+import affiliate_manager
 
 # --- PRODUCTION PORT-BINDING SERVER FOR RENDER (FREE WEB SERVICE TIER HACK) ---
 class HealthCheckHandler(SimpleHTTPRequestHandler):
@@ -173,10 +174,14 @@ def scrape_flipkart(keyword: str) -> list:
     print(f"🔗 URL: {url}")
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-IN,en;q=0.9,en-US;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Referer": "https://www.flipkart.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+        "Referer": "https://www.google.com/",
+        "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1"
     }
     
     products = []
@@ -415,26 +420,27 @@ def scrape_amazon(keyword: str) -> list:
 def format_deal_message(product: dict, discount_percent: float) -> str:
     """
     Formats a shorter, cleaner, and highly professional premium Telegram alert.
-    Categorizes dynamically:
-    - 90%+ = MEGA DEAL
-    - 80%+ = HOT DEAL
     """
     saving = int(round(product["original_price"] - product["sale_price"]))
     mrp = int(round(product["original_price"]))
     deal = int(round(product["sale_price"]))
     
-    # Determine the category label based on discount percentage
+    keyword = product.get("keyword", "")
+    raw_tag = config.KEYWORD_TAGS.get(keyword, "HOT DEAL")
+    tag = f"#{raw_tag.replace(' ', '_')}"
+    
     if discount_percent >= 90.0:
-        label = "🔥 <b>MEGA DEAL ALERT</b> 🔥"
+        label = f"🔥 <b>MEGA DEAL ALERT ({raw_tag})</b> 🔥"
     else:
-        label = "⚡ <b>HOT DEAL ALERT</b> ⚡"
+        label = f"⚡ <b>{raw_tag} ALERT</b> ⚡"
         
     # Shorter, cleaner premium layout
     message = (
         f"{label}\n\n"
         f"📦 <b>{product['name']}</b>\n\n"
         f"💰 <b>MRP:</b> <s>₹{mrp}</s> | <b>Deal Price:</b> ₹{deal}\n"
-        f"🎯 <b>Discount:</b> {int(round(discount_percent))}% OFF (Save ₹{saving})\n\n"
+        f"🎯 <b>Discount:</b> {int(round(discount_percent))}% OFF (Save ₹{saving})\n"
+        f"🏷️ <b>Category:</b> {tag}\n\n"
         f"🛒 <b>Order Here:</b>\n"
         f"👉 {product['url']}"
     )
@@ -450,15 +456,20 @@ def format_review_message(product: dict, discount_percent: float) -> str:
     mrp = int(round(product["original_price"]))
     deal = int(round(product["sale_price"]))
     
+    keyword = product.get("keyword", "")
+    raw_tag = config.KEYWORD_TAGS.get(keyword, "HOT DEAL")
+    tag = f"#{raw_tag.replace(' ', '_')}"
+    
     if discount_percent >= 90.0:
-        label = "🚨 <b>[MEGA DEAL PENDING REVIEW]</b> 🚨"
+        label = f"🚨 <b>[MEGA DEAL PENDING REVIEW - {raw_tag}]</b> 🚨"
     else:
-        label = "⏳ <b>[HOT DEAL PENDING REVIEW]</b> ⏳"
+        label = f"⏳ <b>[{raw_tag} PENDING REVIEW]</b> ⏳"
         
     message = (
         f"{label}\n\n"
         f"📋 <b>Product Name:</b> {product['name']}\n"
-        f"🏷️ <b>Brand/Source:</b> {product.get('source', 'Myntra')}\n\n"
+        f"🏷️ <b>Brand/Source:</b> {product.get('source', 'Myntra')}\n"
+        f"🏷️ <b>Category:</b> {tag}\n\n"
         f"💵 <b>MRP (Original Price):</b> <s>₹{mrp}</s>\n"
         f"💰 <b>Deal Price (Current Price):</b> ₹{deal}\n"
         f"📉 <b>Discount Percentage:</b> {int(round(discount_percent))}% OFF\n"
@@ -539,7 +550,7 @@ def load_posted_deals() -> set:
     Loads previously posted deal IDs or URLs from a local JSON file.
     If the file does not exist, returns an empty set.
     """
-    db_file = getattr(config, "DUPLICATE_DB_FILE", "posted_deals.json")
+    db_file = getattr(config, "DUPLICATE_DB_FILE", "posted_products.json")
     if not os.path.exists(db_file):
         return set()
     try:
@@ -555,7 +566,7 @@ def save_posted_deal(product_id: str):
     """
     Appends a new successfully published product ID/URL to our local JSON database.
     """
-    db_file = getattr(config, "DUPLICATE_DB_FILE", "posted_deals.json")
+    db_file = getattr(config, "DUPLICATE_DB_FILE", "posted_products.json")
     posted = list(load_posted_deals())
     if product_id not in posted:
         posted.append(product_id)
@@ -580,24 +591,25 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
     try:
         # 1. Load already posted deals from the JSON database and settings
         posted_deals = load_posted_deals()
-        min_discount = getattr(config, "DISCOUNT_THRESHOLD", 80.0)
         max_posts_per_scan = getattr(config, "MAX_DEALS_PER_SCAN", 5)
         delay_min = getattr(config, "REQUEST_DELAY_MIN", 3.0)
         delay_max = getattr(config, "REQUEST_DELAY_MAX", 8.0)
         
         print(f"\n============================================================")
         print(f"🔄 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting live multi-site deal scan...")
-        print(f"📊 Settings: Threshold >= {min_discount}% | Rate Limit: {max_posts_per_scan} posts/scan")
+        print(f"📊 Settings: Category-specific thresholds | Rate Limit: {max_posts_per_scan} posts/scan")
         print(f"============================================================")
         
         total_products_scraped = 0
         deals_detected_count = 0
         deals_published_count = 0
         posts_in_this_scan = 0
+        affiliate_generations_in_scan = 0
         max_scrape_retries = 2
         
-        for i, keyword in enumerate(config.KEYWORDS):
-            print(f"\n🔍 [Category {i+1}/{len(config.KEYWORDS)}] Searching for: '{keyword.upper()}' across all stores")
+        for i, (keyword, category_name) in enumerate(config.KEYWORDS_WITH_CATEGORIES):
+            min_discount = config.THRESHOLDS.get(category_name, 50.0)
+            print(f"\n🔍 [Category {i+1}/{len(config.KEYWORDS_WITH_CATEGORIES)}] Searching for: '{keyword.upper()}' ({category_name}) | Threshold: {min_discount}%")
             
             keyword_products = []
             
@@ -618,18 +630,18 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
                     await asyncio.sleep(2)
             keyword_products.extend(myntra_items)
             
-            # --- Store 2: Flipkart (Disabled for Free-Tier Web Service lightweight scan) ---
-            # flipkart_items = []
-            # for attempt in range(max_scrape_retries):
-            #     print(f"   📡 [Flipkart Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
-            #     try:
-            #         flipkart_items = scrape_flipkart(keyword)
-            #         if flipkart_items:
-            #             print(f"      ✅ Flipkart SUCCESS: Found {len(flipkart_items)} products.")
-            #             break
-            #     except Exception as e:
-            #         print(f"      ❌ Flipkart scraping attempt error: {e}")
-            # keyword_products.extend(flipkart_items)
+            # --- Store 2: Flipkart ---
+            flipkart_items = []
+            for attempt in range(max_scrape_retries):
+                print(f"   📡 [Flipkart Scrape] Starting website scan for '{keyword}' (Attempt {attempt+1}/{max_scrape_retries})...")
+                try:
+                    flipkart_items = scrape_flipkart(keyword)
+                    if flipkart_items:
+                        print(f"      ✅ Flipkart SUCCESS: Found {len(flipkart_items)} products.")
+                        break
+                except Exception as e:
+                    print(f"      ❌ Flipkart scraping attempt error: {e}")
+            keyword_products.extend(flipkart_items)
             
             # --- Store 3: Amazon India (Disabled for Free-Tier Web Service lightweight scan) ---
             # amazon_items = []
@@ -656,74 +668,149 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
             # Iterate and evaluate all combined crawled products
             keyword_deals_count = 0
             for idx, product in enumerate(keyword_products):
+                product["keyword"] = keyword  # Map keyword to product for tag formatting
                 discount = product["discount_percentage"]
+                price = product["sale_price"]
+                title = product.get("name", "").strip()
+                image_url = product.get("image_url", "").strip()
                 product_key = product.get("id") or product.get("url")
                 store_name = product.get("source", "Unknown Store")
                 
                 # Print periodic progress logs
-                if idx % 10 == 0 or discount >= min_discount:
+                if idx % 10 == 0 or discount >= config.DISCOUNT_THRESHOLD:
                     print(f"   • [{store_name}] [{idx+1:02d}/{product_count:02d}] {product['name'][:30]}... | Price: ₹{product['sale_price']} | MRP: ₹{product['original_price']} | Discount: {discount}%")
+                
+                # Production-safe Quality Filters Check
+                is_quality_ok = True
+                low_quality_reason = ""
+                
+                if discount < config.DISCOUNT_THRESHOLD:
+                    is_quality_ok = False
+                    low_quality_reason = f"Discount ({discount}%) is below threshold ({config.DISCOUNT_THRESHOLD}%)"
+                elif not (config.MIN_PRICE <= price <= config.MAX_PRICE):
+                    is_quality_ok = False
+                    low_quality_reason = f"Price (₹{price}) is not between ₹{config.MIN_PRICE} and ₹{config.MAX_PRICE}"
+                elif not title:
+                    is_quality_ok = False
+                    low_quality_reason = "Product title is empty"
+                elif not image_url or not image_url.startswith("http"):
+                    is_quality_ok = False
+                    low_quality_reason = "Image URL is missing or invalid"
                     
-                # Filter criteria 1: Must be >= DISCOUNT_THRESHOLD discount
-                if discount >= min_discount:
-                    deals_detected_count += 1
+                if not is_quality_ok:
+                    # Log low quality skipped as requested
+                    print(f"     ⚠️ [Log] low quality skipped: '{title[:30]}' from {store_name}. Reason: {low_quality_reason}")
+                    continue
                     
-                    # Filter criteria 2: Duplicate check
-                    if product_key in posted_deals:
-                        print(f"     🛡️ [DUPLICATE FILTERED] '{product['name'][:30]}' (ID/ASIN: {product_key}) has already been sent. Skipping...")
-                        continue
+                deals_detected_count += 1
+                
+                # Duplicate Check
+                if product_key in posted_deals:
+                    # Log duplicate skipped as requested
+                    print(f"     🛡️ [Log] duplicate skipped: '{title[:30]}' (ID/URL: {product_key}) has already been sent. Skipping...")
+                    continue
+                
+                # Classify the deal
+                if discount >= 90.0:
+                    deal_type = "MEGA DEAL"
+                else:
+                    deal_type = "HOT DEAL"
                     
-                    # Classify the deal
-                    if discount >= 90.0:
-                        category = "MEGA DEAL"
+                # Rate Limiting (Max 3 Telegram posts per scan)
+                if posts_in_this_scan >= max_posts_per_scan:
+                    print(f"     ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
+                    continue
+                
+                keyword_deals_count += 1
+                print(f"     🔥 {deal_type} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
+                
+                # Log "product found" as requested
+                print(f"     📢 [Log] product found: '{product['name']}' from {store_name} ({discount}% off)")
+                
+                affiliate_success = False
+                affiliate_url = product["url"]
+                
+                # Generate affiliate link using Playwright and EarnKaro (Myntra products only, initially)
+                if config.USE_AFFILIATE_LINKS and config.is_earnkaro_configured():
+                    if product.get("source") == "Myntra":
+                        max_gens = getattr(config, "MAX_AFFILIATE_GENERATIONS_PER_SCAN", 3)
+                        if affiliate_generations_in_scan < max_gens:
+                            # Log "affiliate generation started" as requested
+                            print(f"     🔗 [Log] affiliate generation started for URL: {product['url']}")
+                            try:
+                                converted_url = await affiliate_manager.generate_affiliate_link(product["url"])
+                                
+                                # Added delay between affiliate generations: 20 to 40 seconds
+                                post_generation_delay = random.uniform(20, 40)
+                                print(f"     ⏳ Delay active between affiliate generations: Waiting {post_generation_delay:.2f} seconds...")
+                                await asyncio.sleep(post_generation_delay)
+                                
+                                if converted_url and converted_url != product["url"]:
+                                    affiliate_url = converted_url
+                                    affiliate_success = True
+                                    affiliate_generations_in_scan += 1
+                                    # Log "affiliate link generated" as requested
+                                    print(f"     ✅ [Log] affiliate link generated successfully: {converted_url}")
+                                else:
+                                    print("     ⚠️ [Affiliate Automation] Link conversion returned original link (no changes).")
+                            except Exception as aff_err:
+                                # Log error as requested
+                                print(f"     ❌ [Log] Error: Affiliate generation failed: {aff_err}")
+                        else:
+                            print(f"     ⚠️ [Affiliate Automation] Maximum affiliate generations per scan reached ({max_gens}/{max_gens}).")
                     else:
-                        category = "HOT DEAL"
-                        
-                    # Filter criteria 3: Rate Limiting (Max 5 Telegram posts per scan)
-                    if posts_in_this_scan >= max_posts_per_scan:
-                        print(f"     ⚠️ [RATE LIMIT MET] Skipping '{product['name'][:30]}' ({discount}% off) from {store_name} to prevent flooding (max {max_posts_per_scan} posts reached).")
-                        continue
+                        print(f"     ℹ️ [Affiliate Automation] Skipping conversion: Source '{product.get('source')}' is not Myntra.")
+                else:
+                    print("     ℹ️ [Affiliate Automation] Affiliate links are disabled or not configured.")
                     
-                    keyword_deals_count += 1
-                    print(f"     🔥 {category} DETECTED: [{store_name}] {product['name'][:35]} has a {discount}% discount!")
+                # Handle failure/fallback or skip posting based on config
+                if config.USE_AFFILIATE_LINKS and product.get("source") == "Myntra" and not affiliate_success:
+                    # Log affiliate generation failure as requested & skip posting
+                    print(f"     ❌ [Log] affiliate generation failed for URL: {product['url']}. Skipping deal posting.")
+                    continue
+                else:
+                    # Update URL to the converted affiliate URL or original
+                    product["url"] = affiliate_url
+
+                # Build professional telegram card for private review
+                deal_message = format_review_message(product, discount)
+                
+                # Automatically send deal to Telegram
+                try:
+                    await send_telegram_message(
+                        bot_client=bot_client,
+                        channel_chat_id=channel_chat_id,
+                        message=deal_message,
+                        image_url=product["image_url"],
+                        is_dry_run=is_dry_run,
+                        product_url=product["url"]
+                    )
+                    deals_published_count += 1
+                    posts_in_this_scan += 1
                     
-                    # Build professional telegram card for private review
-                    deal_message = format_review_message(product, discount)
+                    # Record to persistent duplicates database immediately
+                    save_posted_deal(product_key)
+                    posted_deals.add(product_key)
                     
-                    # Automatically send deal to Telegram
-                    try:
-                        await send_telegram_message(
-                            bot_client=bot_client,
-                            channel_chat_id=channel_chat_id,
-                            message=deal_message,
-                            image_url=product["image_url"],
-                            is_dry_run=is_dry_run,
-                            product_url=product["url"]
-                        )
-                        deals_published_count += 1
-                        posts_in_this_scan += 1
-                        
-                        # Record to persistent duplicates database immediately
-                        save_posted_deal(product_key)
-                        posted_deals.add(product_key)
-                        
-                        print(f"     🎉 [TELEGRAM SEND SUCCESS] Published {category} card to Telegram.")
-                        
-                        # Polite random delay after sending Telegram message to avoid rate limits
-                        post_delay = random.uniform(delay_min, delay_max)
-                        print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
-                        await asyncio.sleep(post_delay)
-                    except Exception as e:
-                        print(f"     ❌ [TELEGRAM SEND FAILURE] Failed to send Telegram card: {e}")
+                    # Log "Telegram post sent" as requested
+                    print(f"     🎉 [Log] Telegram post sent successfully.")
+                    
+                    # Polite random delay after sending Telegram message to avoid rate limits
+                    post_delay = random.uniform(delay_min, delay_max)
+                    print(f"     ⏳ Waiting {post_delay:.2f} seconds before continuing...")
+                    await asyncio.sleep(post_delay)
+                except Exception as e:
+                    # Log Telegram post failure as requested
+                    print(f"     ❌ [Log] Telegram post sent failed: {e}")
                         
             print(f"   ✨ Category '{keyword}' scan complete. Published {keyword_deals_count} new deals.")
             
         print(f"\n============================================================")
         print(f"📊 SUMMARY OF WORKFLOW SCAN:")
         print(f"   • Total Products Checked: {total_products_scraped}")
-        print(f"   • Total Hot Deals Detected (>= {min_discount}%): {deals_detected_count}")
+        print(f"   • Total Hot Deals Detected: {deals_detected_count}")
         if deals_detected_count == 0:
-            print(f"   • ℹ️ Log: No products matching >= {min_discount}% discount were found during this scan.")
+            print(f"   • ℹ️ Log: No products matching the category discount thresholds were found during this scan.")
         print(f"   • Successfully Broadcasted This Scan: {posts_in_this_scan}")
         print(f"   • Cumulative Deals Sent in Session: {deals_published_count}")
         print(f"============================================================")

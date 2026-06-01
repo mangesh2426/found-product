@@ -10,7 +10,9 @@ import config
 SESSION_FILE = "earnkaro_session.json"
 
 def log_session(emoji: str, level: str, msg: str):
+    import sys
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {emoji} [{level}] {msg}")
+    sys.stdout.flush()
 
 def restore_session_from_env() -> bool:
     """

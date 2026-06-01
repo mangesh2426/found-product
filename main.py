@@ -11,7 +11,31 @@ Includes an HTTP port-binding background server to run 100% free on Render Web S
 """
 
 import asyncio
+import builtins
+
+# Override print globally to force flush=True for instant unbuffered logs on Render
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+_original_print = builtins.print
+def custom_print(*args, **kwargs):
+    kwargs['flush'] = True
+    try:
+        _original_print(*args, **kwargs)
+    except UnicodeEncodeError:
+        clean_args = [str(arg).encode('ascii', 'ignore').decode('ascii') for arg in args]
+        _original_print(*clean_args, **kwargs)
+builtins.print = custom_print
+
 import os
 import re
 import json
@@ -28,6 +52,7 @@ import affiliate_manager
 
 def log_event(emoji: str, level: str, msg: str):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {emoji} [{level}] {msg}")
+    sys.stdout.flush()
 
 # --- PRODUCTION PORT-BINDING SERVER FOR RENDER (FREE WEB SERVICE TIER HACK) ---
 class HealthCheckHandler(SimpleHTTPRequestHandler):
@@ -51,7 +76,7 @@ def run_health_server():
         # Render will pass the port dynamically via PORT environment variable
         port = int(os.getenv("PORT", 8080))
         server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        print(f"📡 Free Tier Port-Binder: Server running on port {port}...")
+        print(f"📡 Web server started on port {port}...")
         server.serve_forever()
     except Exception as e:
         print(f"⚠️ Health Web Server Error: {e}")
@@ -812,6 +837,83 @@ async def scan_for_deals(bot_client: telegram.Bot, channel_chat_id: str, is_dry_
         print("Please check your network environment, server connections, or selector status!")
 
 
+# --- STARTUP DIAGNOSTICS & CHECKS ---
+
+async def run_startup_diagnostics():
+    print("=" * 60)
+    print("🔍 Telegram Deal Bot Startup Diagnostics 🔍")
+    print("=" * 60)
+    
+    # Helper to mask sensitive environment variables
+    def mask_value(val: str) -> str:
+        if not val:
+            return "❌ NOT SET"
+        val = str(val).strip()
+        if val in ("YOUR_BOT_TOKEN_HERE", "@YOUR_PRIVATE_CHANNEL_HERE", "@YOUR_PUBLIC_CHANNEL_HERE", "YOUR_EARNKARO_MOBILE_OR_EMAIL_HERE"):
+            return f"⚠️ DEFAULT PLACEHOLDER VALUE DETECTED ('{val}')"
+        if len(val) <= 8:
+            return "***"
+        return f"{val[:4]}...{val[-4:]} ({len(val)} chars)"
+
+    # 1. Print and check environment variables
+    env_vars = {
+        "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN") or config.BOT_TOKEN,
+        "TELEGRAM_PRIVATE_REVIEW_CHANNEL": os.getenv("TELEGRAM_PRIVATE_REVIEW_CHANNEL") or config.PRIVATE_REVIEW_CHANNEL,
+        "TELEGRAM_PUBLIC_DEALS_CHANNEL": os.getenv("TELEGRAM_PUBLIC_DEALS_CHANNEL") or config.PUBLIC_DEALS_CHANNEL,
+        "TELEGRAM_CHANNEL_USERNAME": os.getenv("TELEGRAM_CHANNEL_USERNAME"),
+        "EARNKARO_MOBILE_OR_EMAIL": os.getenv("EARNKARO_MOBILE_OR_EMAIL") or config.EARNKARO_MOBILE_OR_EMAIL,
+        "EARNKARO_SESSION_BASE64": os.getenv("EARNKARO_SESSION_BASE64"),
+        "PORT": os.getenv("PORT", "8080"),
+        "USE_AFFILIATE_LINKS": os.getenv("USE_AFFILIATE_LINKS") or str(config.USE_AFFILIATE_LINKS)
+    }
+    
+    print("\n📋 Environment Configuration:")
+    for name, val in env_vars.items():
+        print(f"   • {name}: {mask_value(val)}")
+        
+    print("\n🔍 Presence Checks:")
+    bot_token = env_vars["TELEGRAM_BOT_TOKEN"]
+    has_bot_token = bot_token and bot_token != "YOUR_BOT_TOKEN_HERE"
+    print(f"   • BOT_TOKEN presence: {'✅ FOUND' if has_bot_token else '❌ MISSING OR DEFAULT'}")
+    
+    chan_val = env_vars["TELEGRAM_PRIVATE_REVIEW_CHANNEL"] or env_vars["TELEGRAM_PUBLIC_DEALS_CHANNEL"] or env_vars["TELEGRAM_CHANNEL_USERNAME"]
+    has_chan = chan_val and not any(placeholder in str(chan_val) for placeholder in ["@YOUR_PRIVATE_CHANNEL_HERE", "@YOUR_PUBLIC_CHANNEL_HERE"])
+    print(f"   • CHANNEL_USERNAME/DEALS_CHANNEL presence: {'✅ FOUND' if has_chan else '❌ MISSING OR DEFAULT'}")
+    
+    has_session = bool(env_vars["EARNKARO_SESSION_BASE64"])
+    print(f"   • EARNKARO_SESSION_BASE64 presence: {'✅ FOUND' if has_session else 'ℹ️ NOT SET (will look for local session file)'}")
+
+    print("\n💾 Session File Verification:")
+    session_file_exists = os.path.exists("earnkaro_session.json")
+    if session_file_exists:
+        try:
+            with open("earnkaro_session.json", "r", encoding="utf-8") as sf:
+                session_data = json.load(sf)
+                cookie_count = len(session_data.get("cookies", []))
+                print(f"   • earnkaro_session.json status: ✅ RESTORED/PRESENT (Contains {cookie_count} cookies)")
+        except Exception as e:
+            print(f"   • earnkaro_session.json status: ⚠️ Present but corrupt ({e})")
+    else:
+        print(f"   • earnkaro_session.json status: ❌ MISSING! (Affiliate link creation will fall back to original URLs)")
+
+    print("\n🌐 Playwright Browser Check:")
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            await browser.close()
+        print("   • Playwright Chromium status: ✅ AVAILABLE and launching successfully!")
+    except ImportError:
+        print("   • Playwright Chromium status: ❌ Playwright library is NOT installed!")
+    except Exception as e:
+        print("   • Playwright Chromium status: ❌ Playwright is installed but browser binaries are NOT available!")
+        print(f"     Error detail: {e}")
+        print("     👉 Render Build Command FIX: Ensure your build command is: 'pip install -r requirements.txt && playwright install chromium'")
+    
+    print("=" * 60 + "\n")
+    sys.stdout.flush()
+
+
 # --- MAIN RUNNER & SCHEDULER LOOP ---
 
 async def main():
@@ -821,9 +923,14 @@ async def main():
     # Recreate the EarnKaro session file dynamically if available in environment variables (Render/Cloud support)
     affiliate_manager.restore_session_from_env()
     
+    # Run comprehensive diagnostics check
+    await run_startup_diagnostics()
+    
     # Start Render Free Web Service port-binding health server in the background
     log_event("📡", "port binder", "Launching background TCP port-binding server for Render health checks...")
     threading.Thread(target=run_health_server, daemon=True).start()
+    await asyncio.sleep(1.0)
+    log_event("📡", "port binder", "Web server started")
     
     # Check if credentials are configured
     is_live_ready = config.is_configured()
@@ -866,11 +973,13 @@ async def main():
         private_channel = None
         public_channel = None
 
-    # --- Scheduler Continuous Loop (Runs every SCAN_INTERVAL minutes) ---
+    # --- Scheduler Continuous Loop (Runs every SCAN_INTERVAL seconds) ---
     scan_interval = getattr(config, "SCAN_INTERVAL", 5)
-    interval_seconds = scan_interval * 60
+    interval_seconds = scan_interval
     
-    log_event("🔄", "scheduler", f"Scheduler active. Running deal scanning loop every {scan_interval} minutes.")
+    log_event("🔄", "scheduler", f"Scheduler active. Running deal scanning loop every {scan_interval} seconds.")
+    log_event("🤖", "scheduler", "Bot scheduler started")
+    log_event("🚀", "scheduler", "First scan will run now")
     
     try:
         while True:
@@ -885,7 +994,7 @@ async def main():
             next_run = scan_end + timedelta(seconds=interval_seconds)
             
             log_event("⏰", "scan completed", f"Cycle completed. Duration: {duration.total_seconds():.2f} seconds.")
-            log_event("⏳", "scheduler", f"Sleeping for {scan_interval} minutes.")
+            log_event("⏳", "scheduler", f"Sleeping for {scan_interval} seconds.")
             log_event("📅", "scheduler", f"Next scheduled scan cycle at: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
             log_event("ℹ️", "scheduler", "Press Ctrl+C to stop the bot...")
             
@@ -897,9 +1006,26 @@ async def main():
         log_event("❌", "scheduler", f"Unexpected loop error encountered: {e}")
 
 if __name__ == "__main__":
-    # Ensure correct asyncio loop execution across platforms
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n🛑 Bot shutdown cleanly.")
         sys.exit(0)
+    except Exception as e:
+        import traceback
+        print("\n" + "=" * 60)
+        print("💥 CRITICAL CRASH: Bot crashed during execution! 💥")
+        print("=" * 60)
+        print(f"Exact Error: {e}")
+        print("\nTraceback details:")
+        traceback.print_exc()
+        print("\n💡 Beginner-Friendly Tips to fix common Render deployment crashes:")
+        print("1. If the error says 'playwright.executable_path ... does not exist':")
+        print("   👉 Change your Render Build Command to: 'pip install -r requirements.txt && playwright install chromium'")
+        print("2. If the error is 'UnicodeEncodeError':")
+        print("   👉 In Render Dashboard -> Environment Variables, add 'PYTHONIOENCODING' = 'utf-8'")
+        print("3. If the error mentions 'InvalidToken' or 'Unauthorized':")
+        print("   👉 Double check your TELEGRAM_BOT_TOKEN environment variable.")
+        print("=" * 60 + "\n")
+        sys.stdout.flush()
+        sys.exit(1)
